@@ -1,0 +1,18 @@
+.footer {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--layout-footer-h);
+  padding: 0 var(--layout-pad);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+@media (min-width: 64rem) {
+  .footer {
+    display: flex;
+  }
+}

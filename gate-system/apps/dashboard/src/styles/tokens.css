@@ -1,0 +1,23 @@
+:root {
+  /* Breakpoints (for reference in comments / future JS) */
+  /* sm: 480px | md: 768px | lg: 1024px | xl: 1280px */
+
+  --bp-sm: 30rem;
+  --bp-md: 48rem;
+  --bp-lg: 64rem;
+  --bp-xl: 80rem;
+
+  --layout-header-h: clamp(3rem, 7dvh, 4.25rem);
+  --layout-footer-h: clamp(2.75rem, 6dvh, 3.25rem);
+  --layout-bottom-nav-h: clamp(3.75rem, 11dvh, 4.5rem);
+  --layout-sidebar-w: clamp(11rem, 16vw, 15rem);
+  --layout-gap: clamp(0.5rem, 1.5vw, 1rem);
+  --layout-pad: clamp(0.75rem, 2.5vw, 1.25rem);
+  --touch-min: 2.75rem;
+
+  --text-fluid-sm: clamp(0.8rem, 2vw, 0.9rem);
+  --text-fluid-base: clamp(0.9rem, 2.2vw, 1rem);
+  --text-fluid-lg: clamp(1rem, 2.8vw, 1.25rem);
+  --text-fluid-xl: clamp(1.25rem, 3.5vw, 1.75rem);
+  --text-fluid-2xl: clamp(1.5rem, 4vw, 2rem);
+}

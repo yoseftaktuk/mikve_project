@@ -1,0 +1,104 @@
+name: gate-system
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${PUBLIC_HTTP_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - chip-service
+      - payment-service
+      - hardware-service
+      - access-control-service
+      - dashboard
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  chip-service:
+    build:
+      context: .
+      dockerfile: ./services/chip-service/Dockerfile
+    env_file:
+      - ./services/chip-service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: ./services/payment-service/Dockerfile
+    env_file:
+      - ./services/payment-service/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  hardware-service:
+    build:
+      context: .
+      dockerfile: ./services/hardware-service/Dockerfile
+    env_file:
+      - ./services/hardware-service/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    # On real Pi you might want: privileged: true
+    restart: unless-stopped
+
+  access-control-service:
+    build:
+      context: .
+      dockerfile: ./services/access-control-service/Dockerfile
+    env_file:
+      - ./services/access-control-service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build: ./apps/dashboard
+    env_file:
+      - ./apps/dashboard/.env
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+

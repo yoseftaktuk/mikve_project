@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>השוואת כלי ניהול State ב-React</title>
+    <style>
+        @import url('https://googleapis.com');
+        
+        body {
+            font-family: 'Assistant', sans-serif;
+            background-color: #f8fafc;
+            color: #1e293b;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+
+        h1 {
+            font-size: 24px;
+            color: #0f172a;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        p.subtitle {
+            font-size: 14px;
+            color: #64748b;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: right;
+            font-size: 14px;
+        }
+
+        th {
+            background-color: #f1f5f9;
+            color: #334155;
+            font-weight: 700;
+            padding: 14px 16px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        th:first-child {
+            border-top-right-radius: 6px;
+        }
+
+        th:last-child {
+            border-top-left-radius: 6px;
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #475569;
+        }
+
+        tr:hover {
+            background-color: #f8fafc;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .highlight-col {
+            font-weight: 600;
+            color: #0f172a;
+            background-color: #fafafa;
+            width: 15%;
+        }
+
+        @media print {
+            body {
+                background-color: #fff;
+                padding: 0;
+            }
+            .container {
+                box-shadow: none;
+                padding: 0;
+                max-width: 100%;
+            }
+            th {
+                background-color: #f1f5f9 !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>השוואת כלי ניהול State ב-React</h1>
+    <p class="subtitle">ריכוז מאפיינים והבדלים מרכזיים: Context API vs Redux Toolkit vs Zustand</p>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>נושא</th>
+                <th>Context API</th>
+                <th>Redux (Redux Toolkit)</th>
+                <th>Zustand</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td class="highlight-col">סוג הכלי</td>
+                <td>Built-in React feature</td>
+                <td>State management framework</td>
+                <td>Lightweight state manager</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">רעיון מרכזי</td>
+                <td>העברת ערכים גלובליים</td>
+                <td>מערכת state מרכזית עם חוקים</td>
+                <td>store פשוט ו-reactive</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">מורכבות</td>
+                <td>נמוכה</td>
+                <td>גבוהה</td>
+                <td>נמוכה-בינונית</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">boilerplate</td>
+                <td>כמעט אין</td>
+                <td>בינוני (RTK משפר)</td>
+                <td>כמעט אין</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">למידה</td>
+                <td>קל</td>
+                <td>בינוני-קשה</td>
+                <td>קל</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">שימוש עיקרי</td>
+                <td>theme, auth, config</td>
+                <td>אפליקציות מורכבות מאוד</td>
+                <td>רוה האפליקציות המודרניות</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">ביצועים</td>
+                <td>פחות יעיל ב-state משתנה</td>
+                <td>טוב עם selectors</td>
+                <td>טוב מאוד (subscriptions)</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">rerenders</td>
+                <td>יכול לגרום להרבה rerenders</td>
+                <td>מבוקר עם selectors</td>
+                <td>מבוקר מאוד</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">שליטה בארכיטקטורה</td>
+                <td>נמוכה</td>
+                <td>גבוהה מאוד</td>
+                <td>בינונית</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">DevTools</td>
+                <td>בסיסי</td>
+                <td>מצוין (time travel וכו')</td>
+                <td>בסיסי-טוב</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">async logic</td>
+                <td>לא מובנה</td>
+                <td>חזק (middleware, thunk)</td>
+                <td>פשוט (אבל פחות מובנה)</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">סקיילינג</td>
+                <td>בינוני</td>
+                <td>מצוין לארגונים</td>
+                <td>טוב לרוב האפליקציות</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">גמישות</td>
+                <td>גבוהה אבל לא מובנית</td>
+                <td>מובנית מאוד</td>
+                <td>גבוהה מאוד</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">מורכבות state</td>
+                <td>פשוטה</td>
+                <td>מורכבת מאוד</td>
+                <td>בינונית</td>
+            </tr>
+            <tr>
+                <td class="highlight-col">recommended use</td>
+                <td>global config בלבד</td>
+                <td>enterprise apps</td>
+                <td>default modern choice</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+</body>
+</html>

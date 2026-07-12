@@ -1,0 +1,17 @@
+.field {
+  display: block;
+}
+
+.label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.95rem;
+  color: var(--text-h);
+}
+
+.error {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.85rem;
+  color: #ef4444;
+}

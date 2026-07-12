@@ -1,0 +1,82 @@
+.shell {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: var(--layout-pad);
+  overflow: hidden;
+}
+
+.default {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--layout-gap);
+  height: 100%;
+  min-height: 0;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+@media (min-width: 48rem) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 64rem) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 80rem) {
+  .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.spanFull {
+  grid-column: 1 / -1;
+}
+
+.formWrap {
+  width: min(90%, 100%);
+  max-width: 31.25rem;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 48rem) {
+  .formWrap {
+    width: min(70%, 100%);
+  }
+}
+
+.compactGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--layout-gap);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (min-width: 48rem) {
+  .compactGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+  }
+}

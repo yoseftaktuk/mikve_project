@@ -1,0 +1,11 @@
+# Raspberry Pi override — run with:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d
+#
+# Set HARDWARE_MODE=rpi in services/hardware-service/.env before starting.
+
+services:
+  hardware-service:
+    privileged: true
+    devices:
+      - /dev/gpiomem:/dev/gpiomem
+      - /dev/ttyUSB0:/dev/ttyUSB0

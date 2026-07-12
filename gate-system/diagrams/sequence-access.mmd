@@ -1,0 +1,30 @@
+sequenceDiagram
+  autonumber
+  participant User as Person
+  participant RFID as RFID/NFC Reader
+  participant HS as Hardware Service
+  participant Redis as Redis Pub/Sub
+  participant ACS as Access Control Service
+  participant CS as Chip Service
+  participant Door as Door Relay/Lock
+  participant UI as Dashboard
+
+  User->>RFID: Present chip
+  RFID->>HS: UID read
+  HS->>Redis: Publish hardware.events (rfid.scan)
+  Redis-->>ACS: Deliver rfid.scan event
+  ACS->>CS: POST /chips/validate {uid}
+  CS-->>ACS: {chip_id, enabled, balance}
+  alt Enabled and balance >= fee
+    ACS->>CS: POST /chips/{id}/balance/adjust {-fee}
+    CS-->>ACS: {new_balance}
+    ACS->>HS: POST /door/open {seconds}
+    HS->>Door: Toggle relay (unlock)
+    HS-->>ACS: 204
+    ACS->>Redis: Publish access.events (granted)
+    Redis-->>UI: WS event stream (granted)
+  else Denied
+    ACS->>Redis: Publish access.events (denied + reason)
+    Redis-->>UI: WS event stream (denied)
+  end
+

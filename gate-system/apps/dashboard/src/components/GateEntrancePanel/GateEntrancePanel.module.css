@@ -1,0 +1,244 @@
+.panel {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, auto) auto;
+  gap: clamp(0.3rem, 1.2dvh, 0.65rem);
+  padding: clamp(0.5rem, 1.5dvh, 1rem);
+  border-radius: clamp(0.75rem, 1.5dvh, 1.1rem);
+  border: 1px solid var(--accent-border);
+  background: linear-gradient(160deg, var(--accent-bg) 0%, var(--code-bg) 55%);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.25rem, 0.8dvh, 0.45rem);
+  text-align: center;
+  min-height: 0;
+}
+
+.pageTitle {
+  margin: 0;
+  font-size: clamp(1.2rem, 3.2dvh, 1.75rem);
+  font-weight: 600;
+  color: var(--text-h);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.pageSubtitle {
+  margin: 0;
+  font-size: clamp(0.95rem, 2.4dvh, 1.15rem);
+  color: var(--text);
+  line-height: 1.4;
+  max-width: 28rem;
+}
+
+.lead {
+  margin: 0;
+  font-size: clamp(1rem, 2.6dvh, 1.2rem);
+  color: var(--text-h);
+  line-height: 1.4;
+  max-width: 28rem;
+  margin-inline: auto;
+}
+
+.methods {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(0.35rem, 1dvh, 0.55rem);
+  min-height: 0;
+  align-content: stretch;
+}
+
+.methodCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: clamp(0.15rem, 0.6dvh, 0.3rem);
+  padding: clamp(0.35rem, 1.2dvh, 0.65rem) clamp(0.35rem, 1dvh, 0.5rem);
+  min-height: 0;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.methodIcon {
+  font-size: clamp(1.1rem, 3.5dvh, 1.65rem);
+  line-height: 1;
+}
+
+.methodTitle {
+  margin: 0;
+  font-size: clamp(1.05rem, 2.8dvh, 1.3rem);
+  font-weight: 600;
+  color: var(--text-h);
+  line-height: 1.25;
+}
+
+.methodDesc {
+  margin: 0;
+  font-size: clamp(0.95rem, 2.3dvh, 1.1rem);
+  color: var(--text);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.metrics {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(0.3rem, 1dvh, 0.5rem);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(0.3rem, 1dvh, 0.45rem);
+}
+
+.statBox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  padding: clamp(0.3rem, 1dvh, 0.5rem);
+  border-radius: 0.6rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  text-align: center;
+  min-height: 0;
+}
+
+.statLabel {
+  font-size: clamp(0.7rem, 1.6dvh, 0.85rem);
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.statValue {
+  font-size: clamp(0.95rem, 2.5dvh, 1.25rem);
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.statUnit {
+  font-size: clamp(0.7rem, 1.6dvh, 0.85rem);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.cashSection {
+  padding: clamp(0.35rem, 1dvh, 0.55rem);
+  border-radius: 0.6rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  min-height: 0;
+}
+
+.cashHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-bottom: 0.3rem;
+}
+
+.cashTitle {
+  margin: 0;
+  font-size: clamp(0.75rem, 1.8dvh, 0.9rem);
+  font-weight: 600;
+  color: var(--text-h);
+  line-height: 1.2;
+}
+
+.cashAmount {
+  font-size: clamp(0.7rem, 1.6dvh, 0.85rem);
+  font-weight: 600;
+  color: var(--text-h);
+  white-space: nowrap;
+}
+
+.cashProgressBar {
+  height: clamp(0.45rem, 1.2dvh, 0.65rem);
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.cashProgressFill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #7c3aed);
+  transition: width 0.4s ease;
+}
+
+.cashHint {
+  margin: 0.25rem 0 0;
+  font-size: clamp(0.7rem, 1.5dvh, 0.82rem);
+  color: var(--text);
+  text-align: center;
+  line-height: 1.3;
+}
+
+.activity {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: clamp(0.3rem, 0.9dvh, 0.45rem) clamp(0.45rem, 1.2dvh, 0.6rem);
+  border-radius: 0.55rem;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  font-size: clamp(0.7rem, 1.5dvh, 0.82rem);
+  color: var(--text-h);
+  line-height: 1.3;
+  min-height: 0;
+}
+
+.activityIcon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.activityText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loading {
+  margin: 0;
+  text-align: center;
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+  padding: 0.5rem;
+}
+
+@media (min-width: 48rem) and (min-height: 32rem) {
+  .metrics {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    align-items: stretch;
+  }
+
+  .cashSection {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+}

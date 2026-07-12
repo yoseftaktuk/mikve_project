@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+import time
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+try:
+    import RPi.GPIO as GPIO  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - dev machines without Pi GPIO
+    GPIO = None  # type: ignore[assignment]
+
+try:
+    import serial  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+    serial = None  # type: ignore[assignment]
+
+
+def pulses_to_shekels(pulses: int) -> float | None:
+    if pulses == 10:
+        return 5.0
+    if pulses == 15:
+        return 10.0
+    if pulses == 5:
+        return 1.0
+    if pulses == 1:
+        return 0.1
+    logger.warning("unknown_coin_pulses pulses=%s", pulses)
+    return None
+
+
+class RpiGpioController:
+    """BCM GPIO controller for coin input (pin 17) and door relay output (pin 22)."""
+
+    def __init__(
+        self,
+        *,
+        coin_pin: int,
+        door_pin: int,
+        on_cash_shekels: Callable[[float], Awaitable[None]],
+        on_rfid_uid: Callable[[str], Awaitable[None]] | None = None,
+        rfid_serial_port: str | None = None,
+        rfid_baudrate: int = 9600,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
+        self._coin_pin = coin_pin
+        self._door_pin = door_pin
+        self._on_cash_shekels = on_cash_shekels
+        self._on_rfid_uid = on_rfid_uid
+        self._rfid_serial_port = rfid_serial_port
+        self._rfid_baudrate = rfid_baudrate
+        self._loop = loop or asyncio.get_event_loop()
+
+        self._coin_count = 0
+        self._last_pulse_time: datetime | None = None
+        self._coin_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._listener_thread: threading.Thread | None = None
+        self._rfid_thread: threading.Thread | None = None
+        self._door_lock = threading.Lock()
+        self._gpio_ready = False
+
+    @property
+    def gpio_ready(self) -> bool:
+        return self._gpio_ready
+
+    def start(self) -> None:
+        if GPIO is None:
+            raise RuntimeError("RPi.GPIO is not installed on this device")
+
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(self._door_pin, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
+        self._gpio_ready = True
+        logger.info("gpio_started coin_pin=%s door_pin=%s", self._coin_pin, self._door_pin)
+
+        self._stop.clear()
+        self._listener_thread = threading.Thread(target=self._poll_loop, name="coin-listener", daemon=True)
+        self._listener_thread.start()
+
+        if self._on_rfid_uid and self._rfid_serial_port and serial is not None:
+            self._rfid_thread = threading.Thread(target=self._rfid_loop, name="rfid-listener", daemon=True)
+            self._rfid_thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._listener_thread and self._listener_thread.is_alive():
+            self._listener_thread.join(timeout=2)
+        if self._rfid_thread and self._rfid_thread.is_alive():
+            self._rfid_thread.join(timeout=2)
+        if GPIO is not None and self._gpio_ready:
+            GPIO.cleanup()
+            self._gpio_ready = False
+            logger.info("gpio_stopped")
+
+    def open_door_sync(self, seconds: int) -> None:
+        if GPIO is None or not self._gpio_ready:
+            raise RuntimeError("GPIO is not initialized")
+
+        with self._door_lock:
+            logger.info("door_open pin=%s seconds=%s", self._door_pin, seconds)
+            GPIO.output(self._door_pin, GPIO.HIGH)
+            time.sleep(seconds)
+            GPIO.output(self._door_pin, GPIO.LOW)
+            logger.info("door_closed pin=%s", self._door_pin)
+
+    def _pulse_detected(self, _channel: Any) -> None:
+        with self._coin_lock:
+            self._coin_count += 1
+            self._last_pulse_time = datetime.now()
+
+    def _get_coin_if_ready(self) -> float | None:
+        with self._coin_lock:
+            if self._last_pulse_time is None:
+                return None
+
+            delta = datetime.now() - self._last_pulse_time
+            if delta <= timedelta(milliseconds=200):
+                return None
+
+            pulses = self._coin_count
+            self._coin_count = 0
+            self._last_pulse_time = None
+
+        shekels = pulses_to_shekels(pulses)
+        if shekels is None:
+            return None
+        logger.info("coin_detected pulses=%s shekels=%s", pulses, shekels)
+        return shekels
+
+    def _poll_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                shekels = self._get_coin_if_ready()
+                if shekels is not None:
+                    asyncio.run_coroutine_threadsafe(self._on_cash_shekels(shekels), self._loop)
+            except Exception:
+                logger.exception("coin_poll_error")
+            time.sleep(0.05)
+
+    def _rfid_loop(self) -> None:
+        assert self._on_rfid_uid is not None
+        assert self._rfid_serial_port is not None
+        assert serial is not None
+
+        while not self._stop.is_set():
+            try:
+                with serial.Serial(self._rfid_serial_port, self._rfid_baudrate, timeout=0.2) as port:
+                    logger.info("rfid_reader_connected port=%s", self._rfid_serial_port)
+                    while not self._stop.is_set():
+                        raw = port.readline()
+                        if not raw:
+                            continue
+                        uid = raw.decode(errors="ignore").strip()
+                        if uid:
+                            logger.info("rfid_scan uid=%s", uid)
+                            asyncio.run_coroutine_threadsafe(self._on_rfid_uid(uid), self._loop)
+            except Exception:
+                logger.exception("rfid_reader_error port=%s", self._rfid_serial_port)
+                time.sleep(2)

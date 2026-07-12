@@ -1,0 +1,45 @@
+.shell {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (min-width: 64rem) {
+  .body {
+    grid-template-columns: var(--layout-sidebar-w) 1fr;
+  }
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.outlet {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mobileNavRow {
+  min-height: 0;
+}
+
+@media (min-width: 64rem) {
+  .mobileNavRow {
+    display: none;
+  }
+}

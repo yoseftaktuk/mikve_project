@@ -1,0 +1,103 @@
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.25rem;
+}
+
+.logoutButton {
+  min-height: var(--touch-min);
+  padding: 0.35rem 0.75rem;
+  font-size: var(--text-fluid-sm);
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.formField {
+  display: block;
+  text-align: right;
+  margin-bottom: 0.5rem;
+  font-size: var(--text-fluid-sm);
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.25rem;
+  min-height: var(--touch-min);
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: var(--text-fluid-base);
+}
+
+.inputPin {
+  text-align: center;
+  font-size: var(--text-fluid-lg);
+}
+
+.submitButton {
+  width: 100%;
+  min-height: var(--touch-min);
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.submitButton:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.submitButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.actions button {
+  min-height: var(--touch-min);
+  padding: 0.45rem 0.75rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.error {
+  margin: 0;
+  font-size: var(--text-fluid-sm);
+  color: #ef4444;
+}
+
+.errorBanner {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--text-fluid-sm);
+  color: #ef4444;
+}
+
+.successBanner {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--text-fluid-sm);
+  color: #16a34a;
+}
+
+.pinCard {
+  max-width: 24rem;
+  margin: 0 auto;
+  width: 100%;
+}

@@ -1,0 +1,27 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch-min);
+  height: var(--touch-min);
+  padding: 0;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--text-h);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s;
+}
+
+.button:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  transform: scale(1.04);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}

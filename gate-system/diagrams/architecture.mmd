@@ -1,0 +1,33 @@
+flowchart LR
+  subgraph Frontend
+    UI[React Dashboard]
+  end
+
+  subgraph Edge
+    N[Nginx reverse proxy]
+  end
+
+  subgraph Core
+    CS[Chip Service\nFastAPI]
+    HS[Hardware Service\nFastAPI (Pi)]
+    ACS[Access Control Service\nFastAPI]
+  end
+
+  subgraph Data
+    PG[(PostgreSQL)]
+    R[(Redis\nPub/Sub + Cache)]
+  end
+
+  UI -->|REST + WS| N
+  N -->|/api/chips| CS
+  N -->|/api/hardware| HS
+  N -->|/api/access + /ws| ACS
+
+  CS --> PG
+  ACS --> PG
+
+  CS --> R
+  HS --> R
+  ACS --> R
+
+  HS -->|GPIO/Serial| PI[Raspberry Pi devices\nRFID/NFC, Coin Acceptor, Relay Lock]
