@@ -6,6 +6,7 @@ import { AppHeader } from './AppHeader'
 import styles from './AppLayout.module.css'
 import { AppSidebarNav } from './AppNav'
 
+/** Shared shell with header, sidebar/bottom nav, and page outlet. */
 export function AppLayout() {
   return (
     <PageMetaProvider>

@@ -20,6 +20,8 @@ PublishFn = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class CashSession:
+    """Tracks partial cash payments and resets them after inactivity."""
+
     def __init__(self, timeout_seconds: int) -> None:
         self._accumulated_cents = 0
         self._lock = asyncio.Lock()
@@ -32,12 +34,15 @@ class CashSession:
         return self._accumulated_cents
 
     def set_publish(self, publish: PublishFn) -> None:
+        """Attach the callback used to emit cash.reset events."""
         self._publish = publish
 
     async def shutdown(self) -> None:
+        """Cancel any pending cash-session reset timer."""
         await self._cancel_reset_timer()
 
     async def _cancel_reset_timer(self) -> None:
+        """Cancel the inactivity timer if one is running."""
         task = self._reset_task
         self._reset_task = None
         if task is None or task.done():
@@ -47,11 +52,13 @@ class CashSession:
             await task
 
     def _schedule_reset(self) -> None:
+        """Start a timeout that clears unpaid cash if no more coins arrive."""
         if self._timeout_seconds <= 0 or self._accumulated_cents <= 0:
             return
         self._reset_task = asyncio.create_task(self._reset_after_timeout())
 
     async def _reset_after_timeout(self) -> None:
+        """Wait for the inactivity timeout then reset the session."""
         try:
             await asyncio.sleep(self._timeout_seconds)
             await self.reset_expired()
@@ -59,6 +66,7 @@ class CashSession:
             return
 
     async def reset_expired(self) -> None:
+        """Clear accumulated cash and publish a cash.reset event."""
         async with self._lock:
             if self._accumulated_cents <= 0:
                 return
@@ -82,6 +90,7 @@ class CashSession:
             )
 
     async def add(self, amount_cents: int) -> int:
+        """Add inserted cash and refresh the inactivity reset timer."""
         await self._cancel_reset_timer()
         async with self._lock:
             self._accumulated_cents += amount_cents
@@ -91,6 +100,7 @@ class CashSession:
         return total
 
     async def take_fee(self, fee_cents: int) -> int:
+        """Deduct the entrance fee from accumulated cash and return the paid total."""
         await self._cancel_reset_timer()
         async with self._lock:
             paid = self._accumulated_cents
@@ -106,6 +116,7 @@ async def process_chip_access(
     hardware_client: HardwareClient,
     publish,
 ) -> AccessDecisionResponse:
+    """Validate a chip, charge the entrance fee, and open the door if allowed."""
     fee = settings.entrance_fee_cents
     door_seconds = settings.door_unlock_seconds
     ts = datetime.now(timezone.utc).isoformat()
@@ -263,6 +274,7 @@ async def process_cash_inserted(
     hardware_client: HardwareClient,
     publish,
 ) -> tuple[bool, int]:
+    """Accumulate cash and open the door once the entrance fee is reached."""
     fee = settings.entrance_fee_cents
     door_seconds = settings.door_unlock_seconds
     ts = datetime.now(timezone.utc).isoformat()

@@ -5,6 +5,7 @@ DEMO_CHIP_UID = "DEMO-UID-1234"
 
 
 async def ensure_demo_chip(chip_client: ChipClient) -> None:
+    """Ensure the demo chip exists with enough balance for simulation."""
     fee = settings.entrance_fee_cents
     target_balance = fee + 1000
 

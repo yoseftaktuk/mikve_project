@@ -41,6 +41,7 @@ class ChipInfoResponse(BaseModel):
 
 
 def _purge_expired_tokens() -> None:
+    """Remove expired management session tokens from memory."""
     now = time.time()
     expired = [token for token, expires_at in _mgmt_tokens.items() if expires_at <= now]
     for token in expired:
@@ -48,6 +49,7 @@ def _purge_expired_tokens() -> None:
 
 
 def _verify_pin(pin: str) -> None:
+    """Raise if the provided management PIN is missing or invalid."""
     if not settings.management_pin:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="management_disabled")
     if pin != settings.management_pin:
@@ -55,6 +57,7 @@ def _verify_pin(pin: str) -> None:
 
 
 def create_management_token() -> str:
+    """Create a short-lived management session token."""
     _purge_expired_tokens()
     token = secrets.token_urlsafe(32)
     _mgmt_tokens[token] = time.time() + TOKEN_TTL_SECONDS
@@ -62,6 +65,7 @@ def create_management_token() -> str:
 
 
 def require_management_token(x_management_token: str | None = Header(default=None)) -> None:
+    """FastAPI dependency that requires a valid management token header."""
     if not settings.management_pin:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="management_disabled")
     if not x_management_token or x_management_token not in _mgmt_tokens:
@@ -72,11 +76,13 @@ def require_management_token(x_management_token: str | None = Header(default=Non
 
 
 async def authenticate_pin(req: ManagementPinRequest) -> ManagementAuthResponse:
+    """Validate the management PIN and issue a session token."""
     _verify_pin(req.pin)
     return ManagementAuthResponse(token=create_management_token())
 
 
 async def get_chip_info(uid: str, chip_client: ChipClient) -> ChipInfoResponse:
+    """Look up chip details by UID for the management panel."""
     try:
         chip = await chip_client.validate(uid)
     except ValueError:
@@ -90,6 +96,7 @@ async def get_chip_info(uid: str, chip_client: ChipClient) -> ChipInfoResponse:
 
 
 async def topup_chip(req: ChipTopupRequest, chip_client: ChipClient) -> ChipTopupResponse:
+    """Register the chip if needed and add the requested balance."""
     try:
         chip = await chip_client.validate(req.uid)
     except ValueError:
@@ -111,4 +118,5 @@ async def topup_chip(req: ChipTopupRequest, chip_client: ChipClient) -> ChipTopu
 
 
 async def open_door(hardware_client: HardwareClient) -> None:
+    """Request a manual door unlock via the hardware service."""
     await hardware_client.open_door(seconds=settings.door_unlock_seconds)

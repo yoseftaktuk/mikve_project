@@ -11,6 +11,7 @@ const EMPTY_CARD: CreditCardFields = {
   cardholderName: '',
 }
 
+/** Form state and submit flow for charging a chip via credit card. */
 export function useChargeChipPage() {
   const navigate = useNavigate()
   const [amount, setAmount] = useState('')

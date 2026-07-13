@@ -3,6 +3,7 @@ import sys
 
 
 def configure_logging(service_name: str, level: str = "INFO") -> None:
+    """Configure stdout logging for a microservice."""
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

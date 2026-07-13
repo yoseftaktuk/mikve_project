@@ -59,6 +59,7 @@ redis_client: redis.Redis | None = None
 
 @app.on_event("startup")
 async def startup() -> None:
+    """Create tables, connect Redis, and start event consumers."""
     global redis_client, hardware_consumer
     configure_logging(settings.service_name, settings.log_level)
     async with engine.begin() as conn:
@@ -84,6 +85,7 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    """Stop consumers and close Redis on service shutdown."""
     global redis_client, hardware_consumer
     await cash_session.shutdown()
     if hardware_consumer is not None:
@@ -97,6 +99,7 @@ async def shutdown() -> None:
 
 @app.exception_handler(AppError)
 async def app_error_handler(_, exc: AppError):
+    """Convert AppError exceptions into JSON error responses."""
     return JSONResponse(
         status_code=exc.http_status,
         content=ErrorResponse(code=exc.code, message=exc.message, details=exc.details).model_dump(),
@@ -116,6 +119,7 @@ async def healthz():
 
 
 async def _publish(event: dict) -> None:
+    """Publish an access event to Redis and connected dashboards."""
     if redis_client is None:
         return
     await redis_client.publish("access.events", json.dumps(event))
@@ -124,6 +128,7 @@ async def _publish(event: dict) -> None:
 
 @app.post("/access/attempt", response_model=AccessDecisionResponse)
 async def access_attempt(req: AccessAttemptRequest, db: AsyncSession = Depends(get_db)):
+    """Attempt entrance authorization for a scanned chip UID."""
     return await process_chip_access(
         req.uid,
         db,
@@ -135,6 +140,7 @@ async def access_attempt(req: AccessAttemptRequest, db: AsyncSession = Depends(g
 
 @app.get("/access/logs", response_model=list[AccessLogResponse])
 async def access_logs(db: AsyncSession = Depends(get_db), limit: int = 50):
+    """Return recent access grant/deny log entries."""
     limit = max(1, min(limit, 200))
     rows = (await db.execute(select(AccessLog).order_by(AccessLog.id.desc()).limit(limit))).scalars().all()
     return [AccessLogResponse.model_validate(r, from_attributes=True) for r in rows]
@@ -142,6 +148,7 @@ async def access_logs(db: AsyncSession = Depends(get_db), limit: int = 50):
 
 @app.post("/dev/simulate/chip", response_model=AccessDecisionResponse, include_in_schema=False)
 async def dev_simulate_chip(db: AsyncSession = Depends(get_db)):
+    """Simulate a demo chip scan in development mode."""
     if settings.environment != "dev":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
     await ensure_demo_chip(chip_client)
@@ -156,6 +163,7 @@ async def dev_simulate_chip(db: AsyncSession = Depends(get_db)):
 
 @app.post("/dev/simulate/cash", response_model=SimulateCashResponse, include_in_schema=False)
 async def dev_simulate_cash(req: SimulateCashRequest, db: AsyncSession = Depends(get_db)):
+    """Simulate cash insertion in development mode."""
     if settings.environment != "dev":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
     granted, remaining_or_accumulated = await process_cash_inserted(
@@ -175,6 +183,7 @@ async def dev_simulate_cash(req: SimulateCashRequest, db: AsyncSession = Depends
 
 @app.post("/management/auth", response_model=ManagementAuthResponse, include_in_schema=False)
 async def management_auth(req: ManagementPinRequest):
+    """Authenticate the management PIN and return a session token."""
     return await authenticate_pin(req)
 
 
@@ -185,6 +194,7 @@ async def management_auth(req: ManagementPinRequest):
     include_in_schema=False,
 )
 async def management_chip_info(uid: str):
+    """Return chip balance and status for management UI."""
     return await get_chip_info(uid, chip_client)
 
 
@@ -195,6 +205,7 @@ async def management_chip_info(uid: str):
     include_in_schema=False,
 )
 async def management_chip_topup(req: ChipTopupRequest):
+    """Top up a chip balance from the management panel."""
     return await topup_chip(req, chip_client)
 
 
@@ -205,12 +216,14 @@ async def management_chip_topup(req: ChipTopupRequest):
     include_in_schema=False,
 )
 async def management_door_open():
+    """Manually open the door from the management panel."""
     await management_open_door(hardware_client)
     return None
 
 
 @app.post("/hardware/events", status_code=status.HTTP_204_NO_CONTENT)
 async def ingest_hardware_event(event: dict, db: AsyncSession = Depends(get_db)):
+    """Persist a raw hardware event payload for auditing."""
     db.add(HardwareEvent(event_type=str(event.get("type", "unknown")), payload_json=json.dumps(event)))
     await db.commit()
     return None
@@ -218,6 +231,7 @@ async def ingest_hardware_event(event: dict, db: AsyncSession = Depends(get_db))
 
 @app.websocket("/ws/events")
 async def ws_events(ws: WebSocket):
+    """Stream live gate events to the dashboard over WebSocket."""
     await ws.accept()
     await fanout.register(ws)
     try:

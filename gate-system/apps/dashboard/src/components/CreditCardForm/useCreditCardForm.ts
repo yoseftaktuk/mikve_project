@@ -20,6 +20,7 @@ type UseCreditCardFormParams = {
   onChange: (field: keyof CreditCardFields, value: string) => void
 }
 
+/** Formats credit-card input fields as the user types. */
 export function useCreditCardForm({ onChange }: UseCreditCardFormParams) {
   const handleCardholderNameChange = useCallback(
     (value: string) => onChange('cardholderName', value),

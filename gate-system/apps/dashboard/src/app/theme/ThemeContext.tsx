@@ -14,6 +14,7 @@ type ThemeProviderProps = {
   children: ReactNode
 }
 
+/** Provides light/dark theme state to the dashboard. */
 export function ThemeProvider({ children }: ThemeProviderProps) {
   const [theme, setThemeState] = useState<Theme>(() => getInitialTheme())
 

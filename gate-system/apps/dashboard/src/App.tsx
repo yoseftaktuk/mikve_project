@@ -4,6 +4,7 @@ import { ChargeChipPage } from './routes/pages/ChargeChipPage/ChargeChipPage'
 import { DashboardPage } from './routes/pages/DashboardPage/DashboardPage'
 import { ManagementPage } from './routes/pages/ManagementPage/ManagementPage'
 
+/** Root router for the gate dashboard pages. */
 export default function App() {
   return (
     <Routes>

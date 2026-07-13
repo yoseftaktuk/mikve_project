@@ -2,6 +2,7 @@ import axios from 'axios'
 import { API_BASE } from './config'
 import { clearManagementToken, getManagementToken } from './managementStorage'
 
+/** Axios client that attaches the management token and clears it on 401. */
 export const managementApi = axios.create({
   baseURL: API_BASE,
   timeout: 10_000,

@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class HardwareEventConsumer:
+    """Subscribes to hardware.events and runs chip/cash access logic."""
+
     def __init__(
         self,
         redis_url: str,
@@ -32,11 +34,13 @@ class HardwareEventConsumer:
         self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
+        """Start the background Redis subscription loop."""
         self._redis = redis.from_url(self._redis_url, decode_responses=True)
         self._task = asyncio.create_task(self._run())
         logger.info("hardware_event_consumer_started")
 
     async def stop(self) -> None:
+        """Cancel the consumer task and close Redis."""
         if self._task:
             self._task.cancel()
             try:
@@ -48,6 +52,7 @@ class HardwareEventConsumer:
             self._redis = None
 
     async def _run(self) -> None:
+        """Read hardware.events messages until stopped."""
         assert self._redis is not None
         pubsub = self._redis.pubsub()
         await pubsub.subscribe("hardware.events")
@@ -62,6 +67,7 @@ class HardwareEventConsumer:
             await pubsub.aclose()
 
     async def _handle(self, raw: str) -> None:
+        """Dispatch rfid.scan and cash.inserted events to access handlers."""
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:

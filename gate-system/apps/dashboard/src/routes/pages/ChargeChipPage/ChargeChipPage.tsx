@@ -7,6 +7,7 @@ import { StatusCard } from '../../../components/StatusCard'
 import styles from './ChargeChipPage.module.css'
 import { useChargeChipPage } from './useChargeChipPage'
 
+/** Credit-card form page for charging a chip balance. */
 export function ChargeChipPage() {
   usePageMeta({
     title: "טעינת צ'יפ",

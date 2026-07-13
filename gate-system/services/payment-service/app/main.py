@@ -27,6 +27,7 @@ redis_client: redis.Redis | None = None
 
 @app.on_event("startup")
 async def startup() -> None:
+    """Connect to Redis for payment event publishing."""
     global redis_client
     configure_logging(settings.service_name, settings.log_level)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
@@ -35,6 +36,7 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    """Close the Redis connection on shutdown."""
     global redis_client
     if redis_client is not None:
         await redis_client.aclose()
@@ -43,6 +45,7 @@ async def shutdown() -> None:
 
 @app.exception_handler(AppError)
 async def app_error_handler(_, exc: AppError):
+    """Convert AppError exceptions into JSON error responses."""
     return JSONResponse(
         status_code=exc.http_status,
         content=ErrorResponse(code=exc.code, message=exc.message, details=exc.details).model_dump(),
@@ -56,6 +59,7 @@ async def healthz():
 
 @app.post("/charge-chip", response_model=ChargeChipResponse)
 async def charge_chip(req: ChargeChipRequest):
+    """Charge a credit card and publish a chip.charged payment event."""
     charge_credit_card(amount=req.amount)
     if redis_client is not None:
         await redis_client.publish(

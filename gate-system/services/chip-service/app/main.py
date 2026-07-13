@@ -39,6 +39,7 @@ redis_client: redis.Redis | None = None
 
 @app.on_event("startup")
 async def startup() -> None:
+    """Create tables and connect to Redis."""
     global redis_client
     configure_logging(settings.service_name, settings.log_level)
     async with engine.begin() as conn:
@@ -49,6 +50,7 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    """Close the Redis connection on shutdown."""
     global redis_client
     if redis_client is not None:
         await redis_client.aclose()
@@ -57,6 +59,7 @@ async def shutdown() -> None:
 
 @app.exception_handler(AppError)
 async def app_error_handler(_, exc: AppError):
+    """Convert AppError exceptions into JSON error responses."""
     return JSONResponse(
         status_code=exc.http_status,
         content=ErrorResponse(code=exc.code, message=exc.message, details=exc.details).model_dump(),
@@ -69,6 +72,7 @@ async def healthz():
 
 
 async def _publish(event: dict) -> None:
+    """Publish a chip event to Redis pub/sub."""
     if redis_client is None:
         return
     await redis_client.publish("chip.events", json.dumps(event))
@@ -76,6 +80,7 @@ async def _publish(event: dict) -> None:
 
 @app.post("/chips", response_model=ChipResponse, status_code=status.HTTP_201_CREATED)
 async def create_chip(req: ChipCreateRequest, db: AsyncSession = Depends(get_db)):
+    """Register a new chip UID with a zero balance."""
     existing = await db.scalar(select(Chip).where(Chip.uid == req.uid))
     if existing:
         raise AppError(code="chip_uid_taken", message="Chip UID already registered", http_status=400)
@@ -92,6 +97,7 @@ async def create_chip(req: ChipCreateRequest, db: AsyncSession = Depends(get_db)
 
 @app.get("/chips/{chip_id}", response_model=ChipResponse)
 async def get_chip(chip_id: str, db: AsyncSession = Depends(get_db)):
+    """Return chip metadata by internal chip ID."""
     chip = await db.get(Chip, chip_id)
     if not chip:
         raise HTTPException(status_code=404, detail="chip_not_found")
@@ -100,6 +106,7 @@ async def get_chip(chip_id: str, db: AsyncSession = Depends(get_db)):
 
 @app.patch("/chips/{chip_id}/assign", response_model=ChipResponse)
 async def assign_chip(chip_id: str, req: ChipAssignRequest, db: AsyncSession = Depends(get_db)):
+    """Assign a chip to a user ID."""
     chip = await db.get(Chip, chip_id)
     if not chip:
         raise HTTPException(status_code=404, detail="chip_not_found")
@@ -112,6 +119,7 @@ async def assign_chip(chip_id: str, req: ChipAssignRequest, db: AsyncSession = D
 
 @app.get("/chips/{chip_id}/balance", response_model=BalanceResponse)
 async def get_balance(chip_id: str, db: AsyncSession = Depends(get_db)):
+    """Return the current balance for a chip."""
     bal = await db.get(Balance, chip_id)
     if not bal:
         raise HTTPException(status_code=404, detail="balance_not_found")
@@ -120,6 +128,7 @@ async def get_balance(chip_id: str, db: AsyncSession = Depends(get_db)):
 
 @app.post("/chips/{chip_id}/balance/adjust", response_model=BalanceResponse)
 async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSession = Depends(get_db)):
+    """Apply a positive or negative balance delta and record activity."""
     bal = await db.get(Balance, chip_id)
     if not bal:
         raise HTTPException(status_code=404, detail="balance_not_found")
@@ -143,6 +152,7 @@ async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSessi
 
 @app.post("/chips/validate", response_model=ValidateChipResponse)
 async def validate(req: ValidateChipRequest, db: AsyncSession = Depends(get_db)):
+    """Look up a chip by UID and return enablement plus balance."""
     chip = await db.scalar(select(Chip).where(Chip.uid == req.uid))
     if not chip:
         raise HTTPException(status_code=404, detail="chip_not_found")
@@ -162,6 +172,6 @@ async def validate(req: ValidateChipRequest, db: AsyncSession = Depends(get_db))
 
 @app.get("/chips/{chip_id}/activity", response_model=list[ChipActivityResponse])
 async def activity(chip_id: str, db: AsyncSession = Depends(get_db)):
+    """Return chip activity history newest first."""
     rows = (await db.execute(select(ChipActivity).where(ChipActivity.chip_id == chip_id).order_by(ChipActivity.id.desc()))).scalars().all()
     return [ChipActivityResponse.model_validate(r, from_attributes=True) for r in rows]
-

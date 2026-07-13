@@ -9,6 +9,7 @@ type GateEntrancePanelProps = {
   formatMoney: (cents: number) => string
 }
 
+/** Displays entrance fee, cash progress, and last gate activity. */
 export function GateEntrancePanel({
   gateStatus,
   cashProgress,

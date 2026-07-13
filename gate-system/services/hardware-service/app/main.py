@@ -27,12 +27,14 @@ adapter = None
 
 
 async def _publish(channel: str, event: dict) -> None:
+    """Publish a JSON event to a Redis pub/sub channel."""
     if redis_client is None:
         return
     await redis_client.publish(channel, json.dumps(event))
 
 
 async def on_rfid_scan(uid: str) -> None:
+    """Publish an rfid.scan event when a chip UID is read."""
     await _publish(
         "hardware.events",
         {
@@ -44,6 +46,7 @@ async def on_rfid_scan(uid: str) -> None:
 
 
 async def on_cash_inserted(amount_cents: int) -> None:
+    """Publish a cash.inserted event when a coin is accepted."""
     await _publish(
         "hardware.events",
         {
@@ -56,6 +59,7 @@ async def on_cash_inserted(amount_cents: int) -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    """Connect Redis and start the mock or Raspberry Pi hardware adapter."""
     global redis_client, adapter
     configure_logging(settings.service_name, settings.log_level)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
@@ -77,6 +81,7 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    """Stop the hardware adapter and close the Redis connection."""
     global redis_client, adapter
     if adapter is not None:
         await adapter.stop()
@@ -93,6 +98,7 @@ async def healthz():
 
 @app.get("/status")
 async def get_status():
+    """Return whether RFID, coin acceptor, and door relay are connected."""
     st = await adapter.get_status()
     return {
         "mode": st.mode,
@@ -103,6 +109,7 @@ async def get_status():
 
 
 async def _open_door_task(seconds: int) -> None:
+    """Unlock the door for the given seconds and publish door.opened."""
     try:
         await adapter.open_door(seconds=seconds)
         await _publish(
@@ -115,6 +122,7 @@ async def _open_door_task(seconds: int) -> None:
 
 @app.post("/door/open", status_code=status.HTTP_204_NO_CONTENT)
 async def open_door(req: DoorOpenRequest):
+    """Start a background task to unlock the door relay."""
     seconds = req.seconds or settings.door_unlock_seconds
     asyncio.create_task(_open_door_task(seconds))
     return None
@@ -123,6 +131,7 @@ async def open_door(req: DoorOpenRequest):
 # Dev endpoints (mock mode)
 @app.post("/dev/rfid/scan", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
 async def dev_scan(req: SimulateRfidRequest):
+    """Simulate an RFID scan in mock mode only."""
     if settings.hardware_mode != "mock":
         return None
     await adapter.simulate_rfid_scan(req.uid)
@@ -131,6 +140,7 @@ async def dev_scan(req: SimulateRfidRequest):
 
 @app.post("/dev/cash/insert", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
 async def dev_cash(req: SimulateCashRequest):
+    """Simulate cash insertion in mock mode only."""
     if settings.hardware_mode != "mock":
         return None
     await adapter.simulate_cash_inserted(req.amount_cents)

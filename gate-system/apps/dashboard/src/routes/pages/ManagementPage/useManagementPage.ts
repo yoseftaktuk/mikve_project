@@ -33,6 +33,7 @@ function parseShekelsToCents(value: string): number | null {
   return Math.round(shekels * 100)
 }
 
+/** Management auth, chip lookup/top-up, and manual door controls. */
 export function useManagementPage() {
   const [authenticated, setAuthenticated] = useState(() => Boolean(getManagementToken()))
   const [pin, setPin] = useState('')

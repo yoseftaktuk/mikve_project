@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover
 
 
 def pulses_to_shekels(pulses: int) -> float | None:
+    """Map coin-acceptor pulse counts to shekel amounts."""
     if pulses == 10:
         return 5.0
     if pulses == 15:
@@ -70,6 +71,7 @@ class RpiGpioController:
         return self._gpio_ready
 
     def start(self) -> None:
+        """Configure GPIO pins and start coin/RFID listener threads."""
         if GPIO is None:
             raise RuntimeError("RPi.GPIO is not installed on this device")
 
@@ -90,6 +92,7 @@ class RpiGpioController:
             self._rfid_thread.start()
 
     def stop(self) -> None:
+        """Stop listener threads and release GPIO resources."""
         self._stop.set()
         if self._listener_thread and self._listener_thread.is_alive():
             self._listener_thread.join(timeout=2)
@@ -101,6 +104,7 @@ class RpiGpioController:
             logger.info("gpio_stopped")
 
     def open_door_sync(self, seconds: int) -> None:
+        """Hold the door relay HIGH for the given number of seconds."""
         if GPIO is None or not self._gpio_ready:
             raise RuntimeError("GPIO is not initialized")
 
@@ -112,11 +116,13 @@ class RpiGpioController:
             logger.info("door_closed pin=%s", self._door_pin)
 
     def _pulse_detected(self, _channel: Any) -> None:
+        """Count a falling-edge pulse from the coin acceptor."""
         with self._coin_lock:
             self._coin_count += 1
             self._last_pulse_time = datetime.now()
 
     def _get_coin_if_ready(self) -> float | None:
+        """Return shekel value once pulse bursts settle (~200ms quiet)."""
         with self._coin_lock:
             if self._last_pulse_time is None:
                 return None
@@ -136,6 +142,7 @@ class RpiGpioController:
         return shekels
 
     def _poll_loop(self) -> None:
+        """Poll for completed coins and invoke the cash callback."""
         while not self._stop.is_set():
             try:
                 shekels = self._get_coin_if_ready()
@@ -146,6 +153,7 @@ class RpiGpioController:
             time.sleep(0.05)
 
     def _rfid_loop(self) -> None:
+        """Read chip UIDs from the USB serial RFID reader."""
         assert self._on_rfid_uid is not None
         assert self._rfid_serial_port is not None
         assert serial is not None

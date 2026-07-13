@@ -4,6 +4,7 @@ import { StatusCard, statusCardStyles } from '../../../components/StatusCard'
 import styles from './ManagementPage.module.css'
 import { useManagementPage } from './useManagementPage'
 
+/** PIN-protected management page for chip top-up and manual door open. */
 export function ManagementPage() {
   const {
     authenticated,

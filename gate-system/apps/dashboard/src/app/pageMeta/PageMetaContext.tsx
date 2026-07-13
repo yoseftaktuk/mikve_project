@@ -18,6 +18,7 @@ const defaultMeta: PageMeta = { title: 'שער כניסה' }
 
 const PageMetaContext = createContext<PageMetaContextValue | null>(null)
 
+/** Holds page title/subtitle metadata for the app header and content. */
 export function PageMetaProvider({ children }: { children: ReactNode }) {
   const [meta, setMetaState] = useState<PageMeta>(defaultMeta)
 
@@ -30,6 +31,7 @@ export function PageMetaProvider({ children }: { children: ReactNode }) {
   return <PageMetaContext.Provider value={value}>{children}</PageMetaContext.Provider>
 }
 
+/** Read page meta from PageMetaProvider. */
 export function usePageMetaContext() {
   const ctx = useContext(PageMetaContext)
   if (!ctx) throw new Error('usePageMetaContext must be used within PageMetaProvider')

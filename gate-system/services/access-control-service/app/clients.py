@@ -9,6 +9,8 @@ from .settings import settings
 
 @dataclass(frozen=True)
 class ChipValidation:
+    """Chip details returned by the chip-service validate endpoint."""
+
     chip_id: str
     uid: str
     is_enabled: bool
@@ -17,10 +19,13 @@ class ChipValidation:
 
 
 class ChipClient:
+    """HTTP client for chip-service registration, validation, and balance changes."""
+
     def __init__(self) -> None:
         self._base = settings.chip_service_url.rstrip("/")
 
     async def register(self, uid: str) -> None:
+        """Create a chip record for the given UID if it does not already exist."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(f"{self._base}/chips", json={"uid": uid})
         if resp.status_code == 400:
@@ -28,6 +33,7 @@ class ChipClient:
         resp.raise_for_status()
 
     async def validate(self, uid: str) -> ChipValidation:
+        """Fetch chip status and balance by UID."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(f"{self._base}/chips/validate", json={"uid": uid})
         if resp.status_code == 404:
@@ -43,6 +49,7 @@ class ChipClient:
         )
 
     async def adjust_balance(self, chip_id: str, delta_cents: int, reason: str, description: str | None = None) -> int:
+        """Apply a balance delta and return the new balance in cents."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
                 f"{self._base}/chips/{chip_id}/balance/adjust",
@@ -55,11 +62,13 @@ class ChipClient:
 
 
 class HardwareClient:
+    """HTTP client for hardware-service door control."""
+
     def __init__(self) -> None:
         self._base = settings.hardware_service_url.rstrip("/")
 
     async def open_door(self, seconds: int) -> None:
+        """Ask hardware-service to unlock the door for the given seconds."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(f"{self._base}/door/open", json={"seconds": seconds})
         resp.raise_for_status()
-

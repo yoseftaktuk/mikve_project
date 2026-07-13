@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class HardwareStatus:
+    """Snapshot of hardware connection status for RFID, coins, and door."""
+
     mode: str
     rfid_reader_connected: bool
     coin_acceptor_connected: bool
@@ -16,31 +18,42 @@ class HardwareStatus:
 
 
 class HardwareAdapter:
+    """Interface for mock or Raspberry Pi hardware control."""
+
     async def get_status(self) -> HardwareStatus:
+        """Return current hardware connection status."""
         raise NotImplementedError
 
     async def open_door(self, *, seconds: int) -> None:
+        """Unlock the door relay for the given duration."""
         raise NotImplementedError
 
     async def simulate_rfid_scan(self, uid: str) -> None:
+        """Simulate an RFID chip scan (mock mode)."""
         raise NotImplementedError
 
     async def simulate_cash_inserted(self, amount_cents: int) -> None:
+        """Simulate cash insertion (mock mode)."""
         raise NotImplementedError
 
     async def start(self) -> None:
+        """Initialize hardware listeners."""
         return None
 
     async def stop(self) -> None:
+        """Tear down hardware listeners."""
         return None
 
 
 class MockHardwareAdapter(HardwareAdapter):
+    """In-memory adapter used for local development without GPIO."""
+
     def __init__(self, on_rfid_scan, on_cash_inserted):
         self._on_rfid_scan = on_rfid_scan
         self._on_cash_inserted = on_cash_inserted
 
     async def get_status(self) -> HardwareStatus:
+        """Return a connected status for all mock devices."""
         return HardwareStatus(
             mode="mock",
             rfid_reader_connected=True,
@@ -49,18 +62,23 @@ class MockHardwareAdapter(HardwareAdapter):
         )
 
     async def open_door(self, *, seconds: int) -> None:
+        """Log a simulated door open/close cycle."""
         logger.info("door_open seconds=%s", seconds)
         await asyncio.sleep(min(seconds, 10))
         logger.info("door_closed")
 
     async def simulate_rfid_scan(self, uid: str) -> None:
+        """Forward a fake RFID scan to the configured callback."""
         await self._on_rfid_scan(uid)
 
     async def simulate_cash_inserted(self, amount_cents: int) -> None:
+        """Forward fake cash insertion to the configured callback."""
         await self._on_cash_inserted(amount_cents)
 
 
 class RpiHardwareAdapter(HardwareAdapter):
+    """Adapter that drives real Raspberry Pi GPIO and USB RFID."""
+
     def __init__(
         self,
         *,
@@ -82,6 +100,7 @@ class RpiHardwareAdapter(HardwareAdapter):
         self._rfid_baudrate = rfid_baudrate
 
     async def start(self) -> None:
+        """Start GPIO coin listening and optional RFID serial reading."""
         loop = asyncio.get_running_loop()
 
         async def on_cash_shekels(shekels: float) -> None:
@@ -101,11 +120,13 @@ class RpiHardwareAdapter(HardwareAdapter):
         logger.info("rpi_adapter_started")
 
     async def stop(self) -> None:
+        """Stop GPIO and RFID background threads."""
         if self._gpio is not None:
             await asyncio.to_thread(self._gpio.stop)
             self._gpio = None
 
     async def get_status(self) -> HardwareStatus:
+        """Report whether the GPIO controller is ready."""
         gpio_ready = self._gpio is not None and self._gpio.gpio_ready
         return HardwareStatus(
             mode="rpi",
@@ -115,12 +136,15 @@ class RpiHardwareAdapter(HardwareAdapter):
         )
 
     async def open_door(self, *, seconds: int) -> None:
+        """Pulse the door relay HIGH for the given seconds."""
         if self._gpio is None:
             raise RuntimeError("GPIO controller is not running")
         await asyncio.to_thread(self._gpio.open_door_sync, seconds)
 
     async def simulate_rfid_scan(self, uid: str) -> None:
+        """Reject RFID simulation when running on real hardware."""
         raise NotImplementedError("dev endpoints are disabled in rpi mode")
 
     async def simulate_cash_inserted(self, amount_cents: int) -> None:
+        """Reject cash simulation when running on real hardware."""
         raise NotImplementedError("dev endpoints are disabled in rpi mode")

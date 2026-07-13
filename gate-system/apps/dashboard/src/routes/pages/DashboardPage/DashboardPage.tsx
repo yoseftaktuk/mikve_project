@@ -5,6 +5,7 @@ import { PageShell } from '../../../components/PageShell'
 import styles from './DashboardPage.module.css'
 import { useDashboardPage } from './useDashboardPage'
 
+/** Entrance dashboard with live gate status and development simulators. */
 export function DashboardPage() {
   usePageMeta({
     title: 'שער כניסה',

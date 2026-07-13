@@ -1,5 +1,6 @@
 import type { CreditCardFields, FieldErrors } from '../types/chargeChip'
 
+/** Validate that a top-up amount is a positive number of at least 1. */
 export function validateAmount(value: string): string | undefined {
   const trimmed = value.trim()
   if (!trimmed) {
@@ -55,6 +56,7 @@ function validateExpiry(value: string): string | undefined {
   return undefined
 }
 
+/** Validate credit-card fields and return per-field error messages. */
 export function validateCreditCard(fields: CreditCardFields): Pick<FieldErrors, 'cardNumber' | 'expiry' | 'cvc' | 'cardholderName'> {
   const errors: Pick<FieldErrors, 'cardNumber' | 'expiry' | 'cvc' | 'cardholderName'> = {}
   const cardDigits = digitsOnly(fields.cardNumber)
@@ -86,6 +88,7 @@ export function validateCreditCard(fields: CreditCardFields): Pick<FieldErrors, 
   return errors
 }
 
+/** Parse a shekel amount string into a number, or null if invalid. */
 export function parseAmount(value: string): number | null {
   const trimmed = value.trim().replace(',', '.')
   if (!trimmed) return null

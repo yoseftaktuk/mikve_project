@@ -34,6 +34,7 @@ type SimulateCashResult = {
   remaining_cents: number
 }
 
+/** Format an amount in cents as an Israeli shekel string. */
 export function formatMoney(cents: number) {
   return `₪${(cents / 100).toFixed(2)}`
 }
@@ -125,6 +126,7 @@ function chipToastFromDecision(decision: AccessDecision): ChipToastData {
   }
 }
 
+/** Tracks live gate status, WebSocket events, and cash/chip simulation for the entrance screen. */
 export function useDashboardPage() {
   const [gateStatus, setGateStatus] = useState<GateStatus | null>(null)
   const [chipToast, setChipToast] = useState<ChipToastData | null>(null)

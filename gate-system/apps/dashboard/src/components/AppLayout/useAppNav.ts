@@ -14,6 +14,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/management', label: 'ניהול', shortLabel: 'ניהול', icon: '⚙️' },
 ]
 
+/** Builds navigation items and highlights the active route. */
 export function useAppNav() {
   const { pathname } = useLocation()
 
