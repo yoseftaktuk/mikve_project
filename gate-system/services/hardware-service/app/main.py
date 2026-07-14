@@ -62,6 +62,20 @@ async def startup() -> None:
     """Connect Redis and start the mock or Raspberry Pi hardware adapter."""
     global redis_client, adapter
     configure_logging(settings.service_name, settings.log_level)
+    # #region agent log
+    logger.warning(
+        "AGENT_DEBUG %s",
+        {
+            "sessionId": "359384",
+            "runId": "pre-fix",
+            "hypothesisId": "C",
+            "location": "main.py:startup",
+            "message": "hardware_mode_selected",
+            "data": {"hardware_mode": settings.hardware_mode},
+            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+        },
+    )
+    # #endregion
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     if settings.hardware_mode == "mock":
         adapter = MockHardwareAdapter(on_rfid_scan=on_rfid_scan, on_cash_inserted=on_cash_inserted)

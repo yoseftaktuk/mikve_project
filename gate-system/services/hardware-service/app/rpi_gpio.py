@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import platform
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -10,16 +11,71 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# #region agent log
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    payload = {
+        "sessionId": "359384",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    logger.warning("AGENT_DEBUG %s", payload)
+    try:
+        import json
+        import urllib.request
+        body = json.dumps(payload).encode()
+        for host in ("http://host.docker.internal:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
+                     "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358"):
+            try:
+                req = urllib.request.Request(
+                    host,
+                    data=body,
+                    headers={"Content-Type": "application/json", "X-Debug-Session-Id": "359384"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=1)
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
+# #endregion
+
+# #region agent log
+_agent_dbg("A", "rpi_gpio.py:import", "before_RPi_GPIO_import", {
+    "machine": platform.machine(),
+    "system": platform.system(),
+    "platform": platform.platform(),
+})
+# #endregion
+
 try:
     import RPi.GPIO as GPIO  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover - dev machines without Pi GPIO
+    # #region agent log
+    _agent_dbg("A", "rpi_gpio.py:import", "RPi_GPIO_import_ok", {"gpio_is_none": GPIO is None})
+    # #endregion
+except ImportError as e:  # pragma: no cover - package missing on non-ARM hosts
     GPIO = None  # type: ignore[assignment]
+    # #region agent log
+    _agent_dbg("A", "rpi_gpio.py:import", "RPi_GPIO_ImportError", {"type": type(e).__name__, "msg": str(e)})
+    # #endregion
+except RuntimeError as e:  # pragma: no cover - installed but not on a real Pi
+    GPIO = None  # type: ignore[assignment]
+    # #region agent log
+    _agent_dbg("A", "rpi_gpio.py:import", "RPi_GPIO_RuntimeError_caught", {"type": type(e).__name__, "msg": str(e)})
+    # #endregion
 
 try:
     import serial  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
     serial = None  # type: ignore[assignment]
 
+# #region agent log
+_agent_dbg("B", "rpi_gpio.py:import", "module_loaded", {"gpio_available": GPIO is not None, "serial_available": serial is not None})
+# #endregion
 
 def pulses_to_shekels(pulses: int) -> float | None:
     """Map coin-acceptor pulse counts to shekel amounts."""
