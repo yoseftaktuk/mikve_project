@@ -12,8 +12,10 @@ COPY services/hardware-service/requirements.txt /app/requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
+    liblgpio1 \
+    liblgpio-dev \
     && pip install --no-cache-dir -r /app/requirements.txt \
-    && apt-get purge -y gcc python3-dev \
+    && apt-get purge -y gcc python3-dev liblgpio-dev \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -e /app/shared/py

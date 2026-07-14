@@ -72,6 +72,7 @@ async def startup() -> None:
             "location": "main.py:startup",
             "message": "hardware_mode_selected",
             "data": {"hardware_mode": settings.hardware_mode},
+            "runId": "post-fix",
             "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
         },
     )

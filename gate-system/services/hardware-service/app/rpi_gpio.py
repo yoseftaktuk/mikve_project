@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
     payload = {
         "sessionId": "359384",
-        "runId": "pre-fix",
+        "runId": "post-fix",
         "hypothesisId": hypothesis_id,
         "location": location,
         "message": message,
@@ -45,27 +45,40 @@ def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict) -> N
 # #endregion
 
 # #region agent log
-_agent_dbg("A", "rpi_gpio.py:import", "before_RPi_GPIO_import", {
+def _read_text(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+_agent_dbg("D", "rpi_gpio.py:import", "before_RPi_GPIO_import", {
     "machine": platform.machine(),
     "system": platform.system(),
     "platform": platform.platform(),
+    "device_tree_model": _read_text("/proc/device-tree/model"),
+    "gpiochip0_exists": __import__("os").path.exists("/dev/gpiochip0"),
+    "gpiomem_exists": __import__("os").path.exists("/dev/gpiomem"),
 })
 # #endregion
 
 try:
     import RPi.GPIO as GPIO  # type: ignore[import-untyped]
     # #region agent log
-    _agent_dbg("A", "rpi_gpio.py:import", "RPi_GPIO_import_ok", {"gpio_is_none": GPIO is None})
+    _agent_dbg("E", "rpi_gpio.py:import", "RPi_GPIO_import_ok", {
+        "gpio_module": getattr(GPIO, "__name__", None),
+        "gpio_file": getattr(GPIO, "__file__", None),
+    })
     # #endregion
 except ImportError as e:  # pragma: no cover - package missing on non-ARM hosts
     GPIO = None  # type: ignore[assignment]
     # #region agent log
-    _agent_dbg("A", "rpi_gpio.py:import", "RPi_GPIO_ImportError", {"type": type(e).__name__, "msg": str(e)})
+    _agent_dbg("E", "rpi_gpio.py:import", "RPi_GPIO_ImportError", {"type": type(e).__name__, "msg": str(e)})
     # #endregion
-except RuntimeError as e:  # pragma: no cover - installed but not on a real Pi
+except RuntimeError as e:  # pragma: no cover - installed but host is not usable as Pi GPIO
     GPIO = None  # type: ignore[assignment]
     # #region agent log
-    _agent_dbg("A", "rpi_gpio.py:import", "RPi_GPIO_RuntimeError_caught", {"type": type(e).__name__, "msg": str(e)})
+    _agent_dbg("E", "rpi_gpio.py:import", "RPi_GPIO_RuntimeError_caught", {"type": type(e).__name__, "msg": str(e)})
     # #endregion
 
 try:
@@ -129,7 +142,17 @@ class RpiGpioController:
     def start(self) -> None:
         """Configure GPIO pins and start coin/RFID listener threads."""
         if GPIO is None:
-            raise RuntimeError("RPi.GPIO is not installed on this device")
+            raise RuntimeError(
+                "GPIO backend unavailable. Use rpi-lgpio on the Pi and start with "
+                "docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --build"
+            )
+
+        # #region agent log
+        _agent_dbg("E", "rpi_gpio.py:start", "gpio_start_begin", {
+            "coin_pin": self._coin_pin,
+            "door_pin": self._door_pin,
+        })
+        # #endregion
 
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BCM)
@@ -138,6 +161,10 @@ class RpiGpioController:
         GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
         self._gpio_ready = True
         logger.info("gpio_started coin_pin=%s door_pin=%s", self._coin_pin, self._door_pin)
+
+        # #region agent log
+        _agent_dbg("E", "rpi_gpio.py:start", "gpio_start_ok", {"gpio_ready": self._gpio_ready})
+        # #endregion
 
         self._stop.clear()
         self._listener_thread = threading.Thread(target=self._poll_loop, name="coin-listener", daemon=True)

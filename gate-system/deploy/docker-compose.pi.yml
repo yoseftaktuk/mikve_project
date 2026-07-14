@@ -8,4 +8,8 @@ services:
     privileged: true
     devices:
       - /dev/gpiomem:/dev/gpiomem
+      - /dev/gpiochip0:/dev/gpiochip0
       - /dev/ttyUSB0:/dev/ttyUSB0
+    volumes:
+      # Needed so GPIO backends can detect Raspberry Pi hardware inside Docker
+      - /proc/device-tree:/proc/device-tree:ro

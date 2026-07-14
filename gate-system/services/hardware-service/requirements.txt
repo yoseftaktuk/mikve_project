@@ -4,7 +4,8 @@ pydantic>=2.7
 pydantic-settings>=2.2
 redis>=5.0
 pyserial>=3.5
-RPi.GPIO>=0.7.1; platform_machine == "armv7l" or platform_machine == "aarch64"
+# rpi-lgpio provides an RPi.GPIO-compatible API (works on Pi 4/5 + Docker).
+rpi-lgpio>=0.6; platform_machine == "armv7l" or platform_machine == "aarch64"
 pytest>=8.2
 pytest-asyncio>=0.23
 
