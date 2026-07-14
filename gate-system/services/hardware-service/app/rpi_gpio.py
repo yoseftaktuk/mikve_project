@@ -52,6 +52,17 @@ def _read_text(path: str) -> str | None:
     except Exception:
         return None
 
+def _gpio_dists() -> list[str]:
+    try:
+        import importlib.metadata as md
+        return sorted({
+            f"{d.metadata['Name']}:{d.version}"
+            for d in md.distributions()
+            if d.metadata["Name"] in ("RPi.GPIO", "rpi-lgpio", "lgpio")
+        })
+    except Exception as e:
+        return [f"error:{type(e).__name__}:{e}"]
+
 _agent_dbg("D", "rpi_gpio.py:import", "before_RPi_GPIO_import", {
     "machine": platform.machine(),
     "system": platform.system(),
@@ -60,11 +71,7 @@ _agent_dbg("D", "rpi_gpio.py:import", "before_RPi_GPIO_import", {
     "gpiochip0_exists": __import__("os").path.exists("/dev/gpiochip0"),
     "gpiomem_exists": __import__("os").path.exists("/dev/gpiomem"),
     "dev_mounted": __import__("os").path.isdir("/dev"),
-    "gpio_dists": sorted({
-        f"{d.metadata['Name']}:{d.version}"
-        for d in __import__("importlib.metadata").distributions()
-        if d.metadata["Name"] in ("RPi.GPIO", "rpi-lgpio", "lgpio")
-    }),
+    "gpio_dists": _gpio_dists(),
 })
 # #endregion
 
