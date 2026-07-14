@@ -1,15 +1,13 @@
-# Raspberry Pi override — run with:
-#   docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d
+# Raspberry Pi override — REQUIRED on real hardware:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --build
 #
 # Set HARDWARE_MODE=rpi in services/hardware-service/.env before starting.
 
 services:
   hardware-service:
     privileged: true
-    devices:
-      - /dev/gpiomem:/dev/gpiomem
-      - /dev/gpiochip0:/dev/gpiochip0
-      - /dev/ttyUSB0:/dev/ttyUSB0
+    # Mount host /dev so GPIO chips and optional USB RFID appear even if
+    # individual device nodes differ across Pi 3/4/5.
     volumes:
-      # Needed so GPIO backends can detect Raspberry Pi hardware inside Docker
+      - /dev:/dev
       - /proc/device-tree:/proc/device-tree:ro

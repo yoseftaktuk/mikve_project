@@ -59,6 +59,12 @@ _agent_dbg("D", "rpi_gpio.py:import", "before_RPi_GPIO_import", {
     "device_tree_model": _read_text("/proc/device-tree/model"),
     "gpiochip0_exists": __import__("os").path.exists("/dev/gpiochip0"),
     "gpiomem_exists": __import__("os").path.exists("/dev/gpiomem"),
+    "dev_mounted": __import__("os").path.isdir("/dev"),
+    "gpio_dists": sorted({
+        f"{d.metadata['Name']}:{d.version}"
+        for d in __import__("importlib.metadata").distributions()
+        if d.metadata["Name"] in ("RPi.GPIO", "rpi-lgpio", "lgpio")
+    }),
 })
 # #endregion
 
