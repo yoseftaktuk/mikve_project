@@ -1,0 +1,107 @@
+# LAN backend (no GPIO). Run from gate-system/:
+#   docker compose -f deploy/docker-compose.server.yml --project-directory . --env-file .env up -d --build
+#
+# Before starting:
+#   1. Copy .env.example → .env and service .env files
+#   2. Set EDGE_HARDWARE_HOST=<PI_LAN_IP> in .env (Pi hardware-service port 8000)
+#   3. Set HARDWARE_SERVICE_URL=http://<PI_LAN_IP>:8000 in services/access-control-service/.env
+
+name: gate-system-server
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${PUBLIC_HTTP_PORT:-80}:80"
+    environment:
+      EDGE_HARDWARE_HOST: "${EDGE_HARDWARE_HOST:?Set EDGE_HARDWARE_HOST to the Pi LAN IP}"
+    volumes:
+      - ./deploy/nginx/nginx.server.conf.template:/etc/nginx/nginx.template.conf:ro
+    command:
+      - /bin/sh
+      - -c
+      - envsubst '$$EDGE_HARDWARE_HOST' < /etc/nginx/nginx.template.conf > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
+    depends_on:
+      - chip-service
+      - payment-service
+      - access-control-service
+      - dashboard
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # LAN-accessible for the Pi hardware-service (firewall this to your LAN only).
+    ports:
+      - "${REDIS_LAN_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes", "--bind", "0.0.0.0"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  chip-service:
+    build:
+      context: .
+      dockerfile: ./services/chip-service/Dockerfile
+    env_file:
+      - ./services/chip-service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: ./services/payment-service/Dockerfile
+    env_file:
+      - ./services/payment-service/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  access-control-service:
+    build:
+      context: .
+      dockerfile: ./services/access-control-service/Dockerfile
+    env_file:
+      - ./services/access-control-service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build: ./apps/dashboard
+    env_file:
+      - ./apps/dashboard/.env
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

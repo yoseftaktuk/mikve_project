@@ -266,6 +266,89 @@ docker compose up --build
 
 בדשבורד: **כלי פיתוח (סימולציה)** — סימולציית צ'יפ / מזומן.
 
+## Split deployment (Pi edge + LAN backend)
+
+Run only **hardware-service** and the **dashboard** on the Raspberry Pi. Put Postgres, Redis, chip/access/payment (and main Nginx) on another LAN PC to reduce Pi load.
+
+```
+Raspberry Pi (edge)              LAN server (backend)
+---------------------            -------------------------
+hardware-service (GPIO)   <----> Redis pub/sub + HTTP door open
+dashboard + thin Nginx           postgres, redis, chip, access,
+                                 payment, nginx, dashboard
+```
+
+### 1. Configure the LAN server
+
+```bash
+cd gate-system
+cp .env.example .env
+# Set EDGE_HARDWARE_HOST=<PI_LAN_IP>  (e.g. 192.168.1.50)
+cp services/chip-service/.env.example services/chip-service/.env
+cp services/payment-service/.env.example services/payment-service/.env
+cp services/access-control-service/.env.example services/access-control-service/.env
+cp apps/dashboard/.env.example apps/dashboard/.env
+```
+
+In `services/access-control-service/.env`:
+
+```env
+HARDWARE_SERVICE_URL=http://<PI_LAN_IP>:8000
+CHIP_SERVICE_URL=http://chip-service:8000
+```
+
+Start the backend:
+
+```bash
+docker compose -f deploy/docker-compose.server.yml --project-directory . --env-file .env up -d --build
+```
+
+Redis is published on LAN port `6379` (`REDIS_LAN_PORT`). Restrict it with a firewall to your LAN only — do not expose Redis to the public internet.
+
+### 2. Configure the Raspberry Pi edge
+
+```bash
+cd gate-system
+cp deploy/.env.edge.example .env.edge
+# Set SERVER_LAN_IP=<SERVER_LAN_IP>  (e.g. 192.168.1.10)
+cp services/hardware-service/.env.example services/hardware-service/.env
+cp apps/dashboard/.env.example apps/dashboard/.env
+```
+
+In `services/hardware-service/.env`:
+
+```env
+HARDWARE_MODE=rpi
+REDIS_URL=redis://<SERVER_LAN_IP>:6379/0
+```
+
+Start the edge stack (GPIO mounts included):
+
+```bash
+docker compose -f deploy/docker-compose.edge.yml --project-directory . --env-file .env.edge up -d --build
+```
+
+### 3. Open the UI
+
+- Kiosk / Pi: `http://<PI_LAN_IP>/` (edge Nginx proxies business APIs to the server)
+- Server / admin PC: `http://<SERVER_LAN_IP>/`
+
+### Security notes
+
+- Gate opening depends on LAN connectivity (Redis events + HTTP door command).
+- Do not publish Redis (`6379`) or hardware HTTP (`8000`) to the public internet without VPN/firewall rules.
+- Prefer a dedicated LAN VLAN for the gate Pi and server.
+
+### Single-host note
+
+Local development and all-in-one Pi installs still use:
+
+```bash
+docker compose up --build
+# or with GPIO:
+docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --build
+```
+
 ## Folder structure
 
 ```
@@ -281,6 +364,9 @@ gate-system/
   deploy/
     nginx/
     postgres/
+    docker-compose.server.yml  # LAN backend (no hardware)
+    docker-compose.edge.yml    # Pi edge (hardware + dashboard)
+    docker-compose.pi.yml      # GPIO override for single-host Pi
   diagrams/                    # Mermaid + UML-like docs
 ```
 

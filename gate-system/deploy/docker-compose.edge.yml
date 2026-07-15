@@ -1,0 +1,48 @@
+# Raspberry Pi edge (hardware + kiosk UI). Run from gate-system/ on the Pi:
+#   docker compose -f deploy/docker-compose.edge.yml --project-directory . --env-file .env.edge up -d --build
+#
+# Before starting:
+#   1. Copy deploy/.env.edge.example → .env.edge and set SERVER_LAN_IP
+#   2. Set HARDWARE_MODE=rpi and REDIS_URL=redis://<SERVER_LAN_IP>:6379/0 in services/hardware-service/.env
+#   3. Start the LAN server stack first
+
+name: gate-system-edge
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${PUBLIC_HTTP_PORT:-80}:80"
+    environment:
+      SERVER_LAN_IP: "${SERVER_LAN_IP:?Set SERVER_LAN_IP to the backend LAN IP}"
+    volumes:
+      - ./deploy/nginx/nginx.edge.conf.template:/etc/nginx/nginx.template.conf:ro
+    command:
+      - /bin/sh
+      - -c
+      - envsubst '$$SERVER_LAN_IP' < /etc/nginx/nginx.template.conf > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
+    depends_on:
+      - hardware-service
+      - dashboard
+    restart: unless-stopped
+
+  hardware-service:
+    build:
+      context: .
+      dockerfile: ./services/hardware-service/Dockerfile
+    env_file:
+      - ./services/hardware-service/.env
+    # Reachable from the LAN server (access-control opens the door over HTTP).
+    ports:
+      - "${HARDWARE_HTTP_PORT:-8000}:8000"
+    privileged: true
+    volumes:
+      - /dev:/dev
+      - /proc/device-tree:/proc/device-tree:ro
+    restart: unless-stopped
+
+  dashboard:
+    build: ./apps/dashboard
+    env_file:
+      - ./apps/dashboard/.env
+    restart: unless-stopped
