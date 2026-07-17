@@ -145,7 +145,7 @@ export function useManagementPage() {
     } finally {
       setLoading(false)
     }
-  }, [gateStatus?.door_unlock_seconds])
+  }, [gateStatus])
 
   return {
     authenticated,

@@ -267,5 +267,15 @@ class RpiGpioController:
                             logger.info("rfid_scan uid=%s", uid)
                             asyncio.run_coroutine_threadsafe(self._on_rfid_uid(uid), self._loop)
             except Exception:
+                # #region agent log
+                import glob
+                import os
+                _agent_dbg("RFID-A,B,C", "rpi_gpio.py:_rfid_loop", "rfid_serial_open_failed", {
+                    "configured_port": self._rfid_serial_port,
+                    "configured_port_exists": os.path.exists(self._rfid_serial_port),
+                    "serial_devices": sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")),
+                    "dev_is_mounted": os.path.isdir("/dev"),
+                })
+                # #endregion
                 logger.exception("rfid_reader_error port=%s", self._rfid_serial_port)
                 time.sleep(2)

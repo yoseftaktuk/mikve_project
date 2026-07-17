@@ -8,5 +8,7 @@ export function usePageMeta(meta: PageMeta) {
 
   useEffect(() => {
     setMeta(meta)
+    // Intentionally depend on meta fields so inline page objects don't retrigger every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- meta object identity is unstable
   }, [meta.title, meta.subtitle, meta.titleInContent, meta.showLiveStatus, setMeta])
 }

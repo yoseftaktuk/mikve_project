@@ -51,7 +51,7 @@
 
 .methods {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: clamp(0.35rem, 1dvh, 0.55rem);
   min-height: 0;
   align-content: stretch;
@@ -227,6 +227,12 @@
   font-size: var(--text-fluid-sm);
   color: var(--text);
   padding: 0.5rem;
+}
+
+@media (min-width: 48rem) {
+  .methods {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (min-width: 48rem) and (min-height: 32rem) {
