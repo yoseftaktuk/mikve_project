@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import platform
+import os
 import threading
 import time
+import urllib.request
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -12,96 +14,63 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # #region agent log
-def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+_DEBUG_LOG_PATH = "/Users/natankatz/mikve_project/.cursor/debug-359384.log"
+_DEBUG_INGEST = "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358"
+_DEBUG_INGEST_LAN = os.environ.get(
+    "DEBUG_INGEST_URL",
+    "http://192.168.150.196:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
+)
+
+
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    """Session debug probe: file + HTTP ingest + logger (Pi-safe)."""
     payload = {
         "sessionId": "359384",
-        "runId": "post-fix",
+        "runId": "coin-pre",
         "hypothesisId": hypothesis_id,
         "location": location,
         "message": message,
         "data": data,
         "timestamp": int(time.time() * 1000),
     }
-    logger.warning("AGENT_DEBUG %s", payload)
+    line = json.dumps(payload, ensure_ascii=True)
     try:
-        import json
-        import urllib.request
-        body = json.dumps(payload).encode()
-        for host in ("http://host.docker.internal:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-                     "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358"):
-            try:
-                req = urllib.request.Request(
-                    host,
-                    data=body,
-                    headers={"Content-Type": "application/json", "X-Debug-Session-Id": "359384"},
-                    method="POST",
-                )
-                urllib.request.urlopen(req, timeout=1)
-                break
-            except Exception:
-                continue
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
     except Exception:
         pass
-# #endregion
+    body = line.encode("utf-8")
+    for url in (_DEBUG_INGEST, _DEBUG_INGEST_LAN):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Debug-Session-Id": "359384",
+                },
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=0.4).read()
+        except Exception:
+            pass
+    logger.warning("AGENT_DEBUG %s", line)
 
-# #region agent log
-def _read_text(path: str) -> str | None:
-    try:
-        with open(path, encoding="utf-8", errors="ignore") as f:
-            return f.read().strip()
-    except Exception:
-        return None
 
-def _gpio_dists() -> list[str]:
-    try:
-        import importlib.metadata as md
-        return sorted({
-            f"{d.metadata['Name']}:{d.version}"
-            for d in md.distributions()
-            if d.metadata["Name"] in ("RPi.GPIO", "rpi-lgpio", "lgpio")
-        })
-    except Exception as e:
-        return [f"error:{type(e).__name__}:{e}"]
-
-_agent_dbg("D", "rpi_gpio.py:import", "before_RPi_GPIO_import", {
-    "machine": platform.machine(),
-    "system": platform.system(),
-    "platform": platform.platform(),
-    "device_tree_model": _read_text("/proc/device-tree/model"),
-    "gpiochip0_exists": __import__("os").path.exists("/dev/gpiochip0"),
-    "gpiomem_exists": __import__("os").path.exists("/dev/gpiomem"),
-    "dev_mounted": __import__("os").path.isdir("/dev"),
-    "gpio_dists": _gpio_dists(),
-})
 # #endregion
 
 try:
     import RPi.GPIO as GPIO  # type: ignore[import-untyped]
-    # #region agent log
-    _agent_dbg("E", "rpi_gpio.py:import", "RPi_GPIO_import_ok", {
-        "gpio_module": getattr(GPIO, "__name__", None),
-        "gpio_file": getattr(GPIO, "__file__", None),
-    })
-    # #endregion
-except ImportError as e:  # pragma: no cover - package missing on non-ARM hosts
+except ImportError:  # pragma: no cover - package missing on non-ARM hosts
     GPIO = None  # type: ignore[assignment]
-    # #region agent log
-    _agent_dbg("E", "rpi_gpio.py:import", "RPi_GPIO_ImportError", {"type": type(e).__name__, "msg": str(e)})
-    # #endregion
-except RuntimeError as e:  # pragma: no cover - installed but host is not usable as Pi GPIO
+except RuntimeError:  # pragma: no cover - installed but host is not usable as Pi GPIO
     GPIO = None  # type: ignore[assignment]
-    # #region agent log
-    _agent_dbg("E", "rpi_gpio.py:import", "RPi_GPIO_RuntimeError_caught", {"type": type(e).__name__, "msg": str(e)})
-    # #endregion
 
 try:
     import serial  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
     serial = None  # type: ignore[assignment]
 
-# #region agent log
-_agent_dbg("B", "rpi_gpio.py:import", "module_loaded", {"gpio_available": GPIO is not None, "serial_available": serial is not None})
-# #endregion
 
 def pulses_to_shekels(pulses: int) -> float | None:
     """Map coin-acceptor pulse counts to shekel amounts."""
@@ -118,7 +87,7 @@ def pulses_to_shekels(pulses: int) -> float | None:
 
 
 class RpiGpioController:
-    """BCM GPIO controller for coin input (pin 17) and door relay output (pin 22)."""
+    """BCM GPIO controller for coin input and door relay output."""
 
     def __init__(
         self,
@@ -224,16 +193,6 @@ class RpiGpioController:
                 "docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --build"
             )
 
-        # #region agent log
-        _agent_dbg("RELAY-A,B", "rpi_gpio.py:start", "gpio_start_begin", {
-            "coin_pin": self._coin_pin,
-            "door_pin": self._door_pin,
-            "same_pin": self._coin_pin == self._door_pin,
-            "door_idle_level": "HIGH" if self._door_relay_idle_high else "LOW",
-            "door_unlock_mode": "float",
-        })
-        # #endregion
-
         if self._coin_pin == self._door_pin:
             raise RuntimeError(
                 f"COIN_ACCEPTOR_GPIO_PIN and DOOR_RELAY_GPIO_PIN must differ (both={self._coin_pin})"
@@ -248,28 +207,11 @@ class RpiGpioController:
             if "busy" not in str(exc).lower():
                 raise
 
-            release_result = self._release_gpio_pins([self._coin_pin, self._door_pin])
-            # #region agent log
-            _agent_dbg("GPIO-A,B", "rpi_gpio.py:start", "gpio_busy_retry_after_release", {
-                "error": f"{type(exc).__name__}: {exc}",
-                "coin_pin": self._coin_pin,
-                "door_pin": self._door_pin,
-                "release_result": release_result,
-            })
-            # #endregion
-
+            self._release_gpio_pins([self._coin_pin, self._door_pin])
             GPIO.setmode(GPIO.BCM)
             try:
                 self._configure_gpio_pins()
             except Exception as retry_exc:
-                # #region agent log
-                _agent_dbg("GPIO-B", "rpi_gpio.py:start", "gpio_busy_retry_failed", {
-                    "error": f"{type(retry_exc).__name__}: {retry_exc}",
-                    "coin_pin": self._coin_pin,
-                    "door_pin": self._door_pin,
-                    "hint": "Another process/container may hold these GPIO lines. Run: docker ps && sudo gpioinfo gpiochip0",
-                })
-                # #endregion
                 raise RuntimeError(
                     f"GPIO pin busy (coin={self._coin_pin}, door={self._door_pin}). "
                     "Stop duplicate hardware-service containers or other GPIO apps on the Pi."
@@ -277,6 +219,25 @@ class RpiGpioController:
 
         GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
         self._gpio_ready = True
+        # #region agent log
+        try:
+            coin_level = int(GPIO.input(self._coin_pin))
+        except Exception as exc:
+            coin_level = f"err:{type(exc).__name__}"
+        _agent_dbg(
+            "E",
+            "rpi_gpio.py:start",
+            "gpio_started",
+            {
+                "coin_pin": self._coin_pin,
+                "door_pin": self._door_pin,
+                "gpio_ready": True,
+                "coin_level": coin_level,
+                "edge": "FALLING",
+                "bouncetime_ms": 5,
+            },
+        )
+        # #endregion
         logger.info(
             "gpio_started coin_pin=%s door_pin=%s door_idle=%s unlock_mode=float",
             self._coin_pin,
@@ -284,33 +245,11 @@ class RpiGpioController:
             "HIGH" if self._door_relay_idle_high else "LOW",
         )
 
-        # #region agent log
-        try:
-            idle_readback = int(GPIO.input(self._door_pin))
-        except Exception as exc:
-            idle_readback = f"error:{type(exc).__name__}"
-        _agent_dbg("RELAY-A,B", "rpi_gpio.py:start", "gpio_start_ok", {
-            "gpio_ready": self._gpio_ready,
-            "door_pin_readback": idle_readback,
-            "door_idle_level": "HIGH" if self._door_relay_idle_high else "LOW",
-            "door_unlock_mode": "float",
-        })
-        # #endregion
-
         self._stop.clear()
         self._listener_thread = threading.Thread(target=self._poll_loop, name="coin-listener", daemon=True)
         self._listener_thread.start()
 
         if self._on_rfid_uid and self._rfid_enabled(self._rfid_serial_port) and serial is not None:
-            # #region agent log
-            import os
-
-            _agent_dbg("RFID-A,B,C", "rpi_gpio.py:start", "rfid_thread_start", {
-                "configured_port": self._rfid_serial_port,
-                "configured_port_exists": os.path.exists(self._rfid_serial_port or ""),
-                "serial_devices": self._serial_devices(),
-            })
-            # #endregion
             self._rfid_thread = threading.Thread(target=self._rfid_loop, name="rfid-listener", daemon=True)
             self._rfid_thread.start()
         elif self._on_rfid_uid and not self._rfid_enabled(self._rfid_serial_port):
@@ -333,10 +272,8 @@ class RpiGpioController:
         if GPIO is None or not self._gpio_ready:
             raise RuntimeError("GPIO is not initialized")
 
-        idle = self._door_idle_level
         with self._door_lock:
             try:
-                before = int(GPIO.input(self._door_pin))
                 logger.info(
                     "door_open pin=%s seconds=%s mode=float idle=%s",
                     self._door_pin,
@@ -344,44 +281,26 @@ class RpiGpioController:
                     "HIGH" if self._door_relay_idle_high else "LOW",
                 )
                 self._float_door_pin()
-                time.sleep(0.05)
-                during_samples = [int(GPIO.input(self._door_pin)) for _ in range(5)]
-                # #region agent log
-                _agent_dbg("PAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_unlock_asserted", {
-                    "door_pin": self._door_pin,
-                    "seconds": seconds,
-                    "mode": "float",
-                    "level_before": before,
-                    "pin_mode_during": "IN_PUD_OFF",
-                    "level_during_samples": during_samples,
-                    "hint": "If samples stay 0 while wire attached, float may not match physical unplug",
-                })
-                # #endregion
-                logger.info(
-                    "door_unlock_float pin=%s before=%s during_samples=%s",
-                    self._door_pin,
-                    before,
-                    during_samples,
-                )
-                time.sleep(max(0.0, seconds - 0.05))
+                time.sleep(seconds)
             finally:
                 self._apply_door_idle()
-                after = int(GPIO.input(self._door_pin))
-                # #region agent log
-                _agent_dbg("PAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_idle_restored", {
-                    "door_pin": self._door_pin,
-                    "mode": "OUT",
-                    "level_after": after,
-                    "expected_after": int(idle),
-                })
-                # #endregion
-                logger.info("door_closed pin=%s mode=idle_output level=%s", self._door_pin, after)
+                logger.info("door_closed pin=%s mode=idle_output", self._door_pin)
 
     def _pulse_detected(self, _channel: Any) -> None:
         """Count a falling-edge pulse from the coin acceptor."""
         with self._coin_lock:
             self._coin_count += 1
             self._last_pulse_time = datetime.now()
+            count = self._coin_count
+        # #region agent log
+        if count <= 3 or count % 5 == 0:
+            _agent_dbg(
+                "A",
+                "rpi_gpio.py:_pulse_detected",
+                "pulse_edge",
+                {"channel": _channel, "coin_count": count, "coin_pin": self._coin_pin},
+            )
+        # #endregion
 
     def _get_coin_if_ready(self) -> float | None:
         """Return shekel value once pulse bursts settle (~200ms quiet)."""
@@ -398,6 +317,19 @@ class RpiGpioController:
             self._last_pulse_time = None
 
         shekels = pulses_to_shekels(pulses)
+        # #region agent log
+        _agent_dbg(
+            "B",
+            "rpi_gpio.py:_get_coin_if_ready",
+            "coin_settled",
+            {
+                "pulses": pulses,
+                "shekels": shekels,
+                "mapped": shekels is not None,
+                "settle_ms": 200,
+            },
+        )
+        # #endregion
         if shekels is None:
             return None
         logger.info("coin_detected pulses=%s shekels=%s", pulses, shekels)
@@ -405,10 +337,41 @@ class RpiGpioController:
 
     def _poll_loop(self) -> None:
         """Poll for completed coins and invoke the cash callback."""
+        ticks = 0
         while not self._stop.is_set():
             try:
+                ticks += 1
+                # #region agent log
+                if ticks == 1 or ticks % 200 == 0:
+                    level: Any = None
+                    try:
+                        if GPIO is not None and self._gpio_ready:
+                            level = int(GPIO.input(self._coin_pin))
+                    except Exception as exc:
+                        level = f"err:{type(exc).__name__}"
+                    _agent_dbg(
+                        "A",
+                        "rpi_gpio.py:_poll_loop",
+                        "coin_pin_sample",
+                        {
+                            "ticks": ticks,
+                            "coin_pin": self._coin_pin,
+                            "level": level,
+                            "pending_count": self._coin_count,
+                            "listener_alive": True,
+                        },
+                    )
+                # #endregion
                 shekels = self._get_coin_if_ready()
                 if shekels is not None:
+                    # #region agent log
+                    _agent_dbg(
+                        "C",
+                        "rpi_gpio.py:_poll_loop",
+                        "dispatch_cash_callback",
+                        {"shekels": shekels},
+                    )
+                    # #endregion
                     asyncio.run_coroutine_threadsafe(self._on_cash_shekels(shekels), self._loop)
             except Exception:
                 logger.exception("coin_poll_error")
@@ -432,15 +395,6 @@ class RpiGpioController:
                 now = time.time()
                 if now - last_missing_log >= missing_log_interval:
                     devices = self._serial_devices()
-                    # #region agent log
-                    _agent_dbg("RFID-A,B,C", "rpi_gpio.py:_rfid_loop", "rfid_serial_unavailable", {
-                        "configured_port": port_path,
-                        "configured_port_exists": False,
-                        "serial_devices": devices,
-                        "dev_is_mounted": os.path.isdir("/dev"),
-                        "hint": "Plug in the reader or set RFID_SERIAL_PORT= to disable RFID",
-                    })
-                    # #endregion
                     logger.warning(
                         "rfid_reader_unavailable port=%s available_serial_devices=%s",
                         port_path,
@@ -468,15 +422,6 @@ class RpiGpioController:
                     now = time.time()
                     if now - last_missing_log >= missing_log_interval:
                         devices = self._serial_devices()
-                        # #region agent log
-                        _agent_dbg("RFID-A,B,C", "rpi_gpio.py:_rfid_loop", "rfid_serial_open_failed", {
-                            "configured_port": port_path,
-                            "configured_port_exists": False,
-                            "serial_devices": devices,
-                            "dev_is_mounted": os.path.isdir("/dev"),
-                            "error": f"{type(exc).__name__}: {exc}",
-                        })
-                        # #endregion
                         logger.warning(
                             "rfid_reader_unavailable port=%s available_serial_devices=%s",
                             port_path,

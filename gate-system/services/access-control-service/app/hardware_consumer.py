@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+from pathlib import Path
 
 import redis.asyncio as redis
 
@@ -11,6 +13,31 @@ from .clients import ChipClient, HardwareClient
 from .db import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+# #region agent log
+_DEBUG_LOG_PATH = Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log")
+
+
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    payload = {
+        "sessionId": "359384",
+        "runId": "coin-pre",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    logger.warning("AGENT_DEBUG %s", json.dumps(payload, ensure_ascii=True))
+
+
+# #endregion
 
 
 class HardwareEventConsumer:
@@ -92,6 +119,14 @@ class HardwareEventConsumer:
 
             if event_type == "cash.inserted":
                 amount_cents = event.get("amount_cents")
+                # #region agent log
+                _agent_dbg(
+                    "D",
+                    "hardware_consumer.py:_handle",
+                    "cash_inserted_received",
+                    {"amount_cents": amount_cents, "event": event},
+                )
+                # #endregion
                 if amount_cents is None:
                     return
                 async with SessionLocal() as db:
@@ -102,5 +137,16 @@ class HardwareEventConsumer:
                         hardware_client=self._hardware_client,
                         publish=self._publish,
                     )
+                # #region agent log
+                _agent_dbg(
+                    "D",
+                    "hardware_consumer.py:_handle",
+                    "cash_inserted_processed",
+                    {
+                        "amount_cents": int(amount_cents),
+                        "accumulated_cents": self._cash_session.accumulated_cents,
+                    },
+                )
+                # #endregion
         except Exception:
             logger.exception("hardware_event_handle_failed event=%s", raw)

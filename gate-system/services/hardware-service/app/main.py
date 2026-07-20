@@ -47,6 +47,23 @@ async def on_rfid_scan(uid: str) -> None:
 
 async def on_cash_inserted(amount_cents: int) -> None:
     """Publish a cash.inserted event when a coin is accepted."""
+    # #region agent log
+    try:
+        from .rpi_gpio import _agent_dbg
+
+        _agent_dbg(
+            "C",
+            "main.py:on_cash_inserted",
+            "publishing_cash_inserted",
+            {
+                "amount_cents": amount_cents,
+                "redis_ready": redis_client is not None,
+                "redis_url_host": (settings.redis_url or "").split("@")[-1][:80],
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
     await _publish(
         "hardware.events",
         {
@@ -55,6 +72,19 @@ async def on_cash_inserted(amount_cents: int) -> None:
             "ts": datetime.now(timezone.utc).isoformat(),
         },
     )
+    # #region agent log
+    try:
+        from .rpi_gpio import _agent_dbg
+
+        _agent_dbg(
+            "C",
+            "main.py:on_cash_inserted",
+            "published_cash_inserted",
+            {"amount_cents": amount_cents},
+        )
+    except Exception:
+        pass
+    # #endregion
 
 
 @app.on_event("startup")
@@ -62,21 +92,6 @@ async def startup() -> None:
     """Connect Redis and start the mock or Raspberry Pi hardware adapter."""
     global redis_client, adapter
     configure_logging(settings.service_name, settings.log_level)
-    # #region agent log
-    logger.warning(
-        "AGENT_DEBUG %s",
-        {
-            "sessionId": "359384",
-            "runId": "pre-fix",
-            "hypothesisId": "C",
-            "location": "main.py:startup",
-            "message": "hardware_mode_selected",
-            "data": {"hardware_mode": settings.hardware_mode},
-            "runId": "post-fix",
-            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-        },
-    )
-    # #endregion
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     if settings.hardware_mode == "mock":
         adapter = MockHardwareAdapter(on_rfid_scan=on_rfid_scan, on_cash_inserted=on_cash_inserted)
