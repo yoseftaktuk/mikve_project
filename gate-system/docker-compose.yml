@@ -33,7 +33,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # LAN-accessible for the Pi hardware-service (firewall this to your LAN only).
+    ports:
+      - "${REDIS_LAN_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes", "--bind", "0.0.0.0"]
     volumes:
       - redis_data:/data
     healthcheck:

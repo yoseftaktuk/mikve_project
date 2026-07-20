@@ -29,8 +29,51 @@ adapter = None
 async def _publish(channel: str, event: dict) -> None:
     """Publish a JSON event to a Redis pub/sub channel."""
     if redis_client is None:
+        # #region agent log
+        try:
+            from .rpi_gpio import _agent_dbg
+
+            _agent_dbg("C", "main.py:_publish", "redis_client_none", {"channel": channel, "type": event.get("type")})
+        except Exception:
+            pass
+        # #endregion
         return
-    await redis_client.publish(channel, json.dumps(event))
+    try:
+        receivers = await asyncio.wait_for(redis_client.publish(channel, json.dumps(event)), timeout=3.0)
+        # #region agent log
+        try:
+            from .rpi_gpio import _agent_dbg
+
+            _agent_dbg(
+                "C",
+                "main.py:_publish",
+                "redis_publish_ok",
+                {"channel": channel, "type": event.get("type"), "receivers": receivers},
+            )
+        except Exception:
+            pass
+        # #endregion
+    except Exception as exc:
+        # #region agent log
+        try:
+            from .rpi_gpio import _agent_dbg
+
+            _agent_dbg(
+                "C",
+                "main.py:_publish",
+                "redis_publish_failed",
+                {
+                    "channel": channel,
+                    "type": event.get("type"),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "redis_url": (settings.redis_url or "")[:80],
+                },
+            )
+        except Exception:
+            pass
+        # #endregion
+        logger.exception("redis_publish_failed channel=%s type=%s", channel, event.get("type"))
+        raise
 
 
 async def on_rfid_scan(uid: str) -> None:
