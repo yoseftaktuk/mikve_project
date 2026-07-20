@@ -126,11 +126,12 @@ class RpiHardwareAdapter(HardwareAdapter):
             self._gpio = None
 
     async def get_status(self) -> HardwareStatus:
-        """Report whether the GPIO controller is ready."""
+        """Report whether the GPIO controller and RFID reader are ready."""
         gpio_ready = self._gpio is not None and self._gpio.gpio_ready
+        rfid_ready = self._gpio is not None and self._gpio.rfid_connected
         return HardwareStatus(
             mode="rpi",
-            rfid_reader_connected=gpio_ready,
+            rfid_reader_connected=rfid_ready,
             coin_acceptor_connected=gpio_ready,
             door_relay_connected=gpio_ready,
         )

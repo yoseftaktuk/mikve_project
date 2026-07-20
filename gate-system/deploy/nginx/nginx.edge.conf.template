@@ -8,7 +8,8 @@ http {
   sendfile on;
   keepalive_timeout 65;
 
-  # Docker DNS for local services; public resolver fallback for LAN IP upstream.
+  # Resolve Docker service names at request time (avoids "host not found in upstream"
+  # when nginx starts before dashboard/hardware-service).
   resolver 127.0.0.11 8.8.8.8 valid=10s ipv6=off;
 
   map $http_upgrade $connection_upgrade {
@@ -16,14 +17,12 @@ http {
     '' close;
   }
 
-  upstream dashboard { server dashboard:80; }
-  upstream hardware { server hardware-service:8000; }
-
   server {
     listen 80;
 
     location / {
-      proxy_pass http://dashboard;
+      set $dashboard_upstream "dashboard:80";
+      proxy_pass http://$dashboard_upstream;
       proxy_set_header Host $host;
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -31,8 +30,9 @@ http {
     }
 
     location /api/hardware/ {
+      set $hardware_upstream "hardware-service:8000";
       rewrite ^/api/hardware/(.*)$ /$1 break;
-      proxy_pass http://hardware;
+      proxy_pass http://$hardware_upstream;
       proxy_set_header Host $host;
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

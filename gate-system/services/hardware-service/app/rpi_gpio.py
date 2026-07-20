@@ -147,6 +147,21 @@ class RpiGpioController:
         self._rfid_thread: threading.Thread | None = None
         self._door_lock = threading.Lock()
         self._gpio_ready = False
+        self._rfid_connected = False
+
+    @property
+    def rfid_connected(self) -> bool:
+        return self._rfid_connected
+
+    @staticmethod
+    def _serial_devices() -> list[str]:
+        import glob
+
+        return sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+
+    @staticmethod
+    def _rfid_enabled(rfid_serial_port: str | None) -> bool:
+        return bool(rfid_serial_port and rfid_serial_port.strip())
 
     @property
     def gpio_ready(self) -> bool:
@@ -255,9 +270,20 @@ class RpiGpioController:
         self._listener_thread = threading.Thread(target=self._poll_loop, name="coin-listener", daemon=True)
         self._listener_thread.start()
 
-        if self._on_rfid_uid and self._rfid_serial_port and serial is not None:
+        if self._on_rfid_uid and self._rfid_enabled(self._rfid_serial_port) and serial is not None:
+            # #region agent log
+            import os
+
+            _agent_dbg("RFID-A,B,C", "rpi_gpio.py:start", "rfid_thread_start", {
+                "configured_port": self._rfid_serial_port,
+                "configured_port_exists": os.path.exists(self._rfid_serial_port or ""),
+                "serial_devices": self._serial_devices(),
+            })
+            # #endregion
             self._rfid_thread = threading.Thread(target=self._rfid_loop, name="rfid-listener", daemon=True)
             self._rfid_thread.start()
+        elif self._on_rfid_uid and not self._rfid_enabled(self._rfid_serial_port):
+            logger.info("rfid_reader_disabled no RFID_SERIAL_PORT configured")
 
     def stop(self) -> None:
         """Stop listener threads and release GPIO resources."""
@@ -326,10 +352,40 @@ class RpiGpioController:
         assert self._rfid_serial_port is not None
         assert serial is not None
 
+        import os
+
+        missing_log_interval = 30.0
+        last_missing_log = 0.0
+
         while not self._stop.is_set():
+            port_path = self._rfid_serial_port
+            if not os.path.exists(port_path):
+                self._rfid_connected = False
+                now = time.time()
+                if now - last_missing_log >= missing_log_interval:
+                    devices = self._serial_devices()
+                    # #region agent log
+                    _agent_dbg("RFID-A,B,C", "rpi_gpio.py:_rfid_loop", "rfid_serial_unavailable", {
+                        "configured_port": port_path,
+                        "configured_port_exists": False,
+                        "serial_devices": devices,
+                        "dev_is_mounted": os.path.isdir("/dev"),
+                        "hint": "Plug in the reader or set RFID_SERIAL_PORT= to disable RFID",
+                    })
+                    # #endregion
+                    logger.warning(
+                        "rfid_reader_unavailable port=%s available_serial_devices=%s",
+                        port_path,
+                        devices or "none",
+                    )
+                    last_missing_log = now
+                time.sleep(2)
+                continue
+
             try:
-                with serial.Serial(self._rfid_serial_port, self._rfid_baudrate, timeout=0.2) as port:
-                    logger.info("rfid_reader_connected port=%s", self._rfid_serial_port)
+                with serial.Serial(port_path, self._rfid_baudrate, timeout=0.2) as port:
+                    self._rfid_connected = True
+                    logger.info("rfid_reader_connected port=%s", port_path)
                     while not self._stop.is_set():
                         raw = port.readline()
                         if not raw:
@@ -338,16 +394,31 @@ class RpiGpioController:
                         if uid:
                             logger.info("rfid_scan uid=%s", uid)
                             asyncio.run_coroutine_threadsafe(self._on_rfid_uid(uid), self._loop)
+            except OSError as exc:
+                self._rfid_connected = False
+                if getattr(exc, "errno", None) == 2:
+                    now = time.time()
+                    if now - last_missing_log >= missing_log_interval:
+                        devices = self._serial_devices()
+                        # #region agent log
+                        _agent_dbg("RFID-A,B,C", "rpi_gpio.py:_rfid_loop", "rfid_serial_open_failed", {
+                            "configured_port": port_path,
+                            "configured_port_exists": False,
+                            "serial_devices": devices,
+                            "dev_is_mounted": os.path.isdir("/dev"),
+                            "error": f"{type(exc).__name__}: {exc}",
+                        })
+                        # #endregion
+                        logger.warning(
+                            "rfid_reader_unavailable port=%s available_serial_devices=%s",
+                            port_path,
+                            devices or "none",
+                        )
+                        last_missing_log = now
+                else:
+                    logger.exception("rfid_reader_error port=%s", port_path)
+                time.sleep(2)
             except Exception:
-                # #region agent log
-                import glob
-                import os
-                _agent_dbg("RFID-A,B,C", "rpi_gpio.py:_rfid_loop", "rfid_serial_open_failed", {
-                    "configured_port": self._rfid_serial_port,
-                    "configured_port_exists": os.path.exists(self._rfid_serial_port),
-                    "serial_devices": sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")),
-                    "dev_is_mounted": os.path.isdir("/dev"),
-                })
-                # #endregion
-                logger.exception("rfid_reader_error port=%s", self._rfid_serial_port)
+                self._rfid_connected = False
+                logger.exception("rfid_reader_error port=%s", port_path)
                 time.sleep(2)

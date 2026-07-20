@@ -15,13 +15,12 @@ http {
     '' close;
   }
 
-  upstream dashboard { server dashboard:80; }
-
   server {
     listen 80;
 
     location / {
-      proxy_pass http://dashboard;
+      set $dashboard_upstream "dashboard:80";
+      proxy_pass http://$dashboard_upstream;
       proxy_set_header Host $host;
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
