@@ -89,6 +89,7 @@ class RpiHardwareAdapter(HardwareAdapter):
         door_unlock_seconds: int,
         rfid_serial_port: str,
         rfid_baudrate: int,
+        door_relay_active_high: bool = True,
     ) -> None:
         self._on_rfid_scan = on_rfid_scan
         self._on_cash_inserted = on_cash_inserted
@@ -98,6 +99,7 @@ class RpiHardwareAdapter(HardwareAdapter):
         self._door_pin = door_pin
         self._rfid_serial_port = rfid_serial_port
         self._rfid_baudrate = rfid_baudrate
+        self._door_relay_active_high = door_relay_active_high
 
     async def start(self) -> None:
         """Start GPIO coin listening and optional RFID serial reading."""
@@ -114,6 +116,7 @@ class RpiHardwareAdapter(HardwareAdapter):
             on_rfid_uid=self._on_rfid_scan,
             rfid_serial_port=self._rfid_serial_port,
             rfid_baudrate=self._rfid_baudrate,
+            door_relay_active_high=self._door_relay_active_high,
             loop=loop,
         )
         await asyncio.to_thread(self._gpio.start)

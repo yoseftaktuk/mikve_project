@@ -129,6 +129,7 @@ class RpiGpioController:
         on_rfid_uid: Callable[[str], Awaitable[None]] | None = None,
         rfid_serial_port: str | None = None,
         rfid_baudrate: int = 9600,
+        door_relay_active_high: bool = True,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._coin_pin = coin_pin
@@ -137,6 +138,7 @@ class RpiGpioController:
         self._on_rfid_uid = on_rfid_uid
         self._rfid_serial_port = rfid_serial_port
         self._rfid_baudrate = rfid_baudrate
+        self._door_relay_active_high = door_relay_active_high
         self._loop = loop or asyncio.get_event_loop()
 
         self._coin_count = 0
@@ -148,6 +150,16 @@ class RpiGpioController:
         self._door_lock = threading.Lock()
         self._gpio_ready = False
         self._rfid_connected = False
+
+    @property
+    def _door_idle_level(self) -> int:
+        """GPIO level when the door should stay locked."""
+        return GPIO.HIGH if not self._door_relay_active_high else GPIO.LOW
+
+    @property
+    def _door_unlock_level(self) -> int:
+        """GPIO level that energizes the unlock path on the relay."""
+        return GPIO.LOW if not self._door_relay_active_high else GPIO.HIGH
 
     @property
     def rfid_connected(self) -> bool:
@@ -199,7 +211,7 @@ class RpiGpioController:
 
     def _configure_gpio_pins(self) -> None:
         GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(self._door_pin, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(self._door_pin, GPIO.OUT, initial=self._door_idle_level)
 
     def start(self) -> None:
         """Configure GPIO pins and start coin/RFID listener threads."""
@@ -210,10 +222,13 @@ class RpiGpioController:
             )
 
         # #region agent log
-        _agent_dbg("GPIO-A,B,C", "rpi_gpio.py:start", "gpio_start_begin", {
+        _agent_dbg("RELAY-A,B", "rpi_gpio.py:start", "gpio_start_begin", {
             "coin_pin": self._coin_pin,
             "door_pin": self._door_pin,
             "same_pin": self._coin_pin == self._door_pin,
+            "door_relay_active_high": self._door_relay_active_high,
+            "door_idle_level": "HIGH" if not self._door_relay_active_high else "LOW",
+            "door_unlock_level": "LOW" if not self._door_relay_active_high else "HIGH",
         })
         # #endregion
 
@@ -260,10 +275,23 @@ class RpiGpioController:
 
         GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
         self._gpio_ready = True
-        logger.info("gpio_started coin_pin=%s door_pin=%s", self._coin_pin, self._door_pin)
+        logger.info(
+            "gpio_started coin_pin=%s door_pin=%s door_relay_active_high=%s",
+            self._coin_pin,
+            self._door_pin,
+            self._door_relay_active_high,
+        )
 
         # #region agent log
-        _agent_dbg("E", "rpi_gpio.py:start", "gpio_start_ok", {"gpio_ready": self._gpio_ready})
+        try:
+            idle_readback = int(GPIO.input(self._door_pin))
+        except Exception as exc:
+            idle_readback = f"error:{type(exc).__name__}"
+        _agent_dbg("RELAY-A,B", "rpi_gpio.py:start", "gpio_start_ok", {
+            "gpio_ready": self._gpio_ready,
+            "door_pin_readback": idle_readback,
+            "door_relay_active_high": self._door_relay_active_high,
+        })
         # #endregion
 
         self._stop.clear()
@@ -298,15 +326,43 @@ class RpiGpioController:
             logger.info("gpio_stopped")
 
     def open_door_sync(self, seconds: int) -> None:
-        """Hold the door relay HIGH for the given number of seconds."""
+        """Pulse the door relay to the unlock level for the given seconds."""
         if GPIO is None or not self._gpio_ready:
             raise RuntimeError("GPIO is not initialized")
 
+        unlock = self._door_unlock_level
+        idle = self._door_idle_level
         with self._door_lock:
-            logger.info("door_open pin=%s seconds=%s", self._door_pin, seconds)
-            GPIO.output(self._door_pin, GPIO.HIGH)
+            before = int(GPIO.input(self._door_pin))
+            logger.info(
+                "door_open pin=%s seconds=%s active_high=%s unlock_level=%s",
+                self._door_pin,
+                seconds,
+                self._door_relay_active_high,
+                "LOW" if unlock == GPIO.LOW else "HIGH",
+            )
+            GPIO.output(self._door_pin, unlock)
+            during = int(GPIO.input(self._door_pin))
+            # #region agent log
+            _agent_dbg("RELAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_unlock_asserted", {
+                "door_pin": self._door_pin,
+                "seconds": seconds,
+                "active_high": self._door_relay_active_high,
+                "level_before": before,
+                "level_during": during,
+                "expected_during": int(unlock),
+            })
+            # #endregion
             time.sleep(seconds)
-            GPIO.output(self._door_pin, GPIO.LOW)
+            GPIO.output(self._door_pin, idle)
+            after = int(GPIO.input(self._door_pin))
+            # #region agent log
+            _agent_dbg("RELAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_idle_restored", {
+                "door_pin": self._door_pin,
+                "level_after": after,
+                "expected_after": int(idle),
+            })
+            # #endregion
             logger.info("door_closed pin=%s", self._door_pin)
 
     def _pulse_detected(self, _channel: Any) -> None:

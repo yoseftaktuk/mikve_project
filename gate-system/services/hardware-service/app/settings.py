@@ -12,6 +12,8 @@ class Settings(CommonSettings):
     hardware_mode: str = Field(default="mock", alias="HARDWARE_MODE")  # mock|rpi
 
     door_relay_gpio_pin: int = Field(default=22, alias="DOOR_RELAY_GPIO_PIN")
+    # True: HIGH unlocks (active-HIGH relay). False: LOW unlocks (common Songle/optocoupler modules).
+    door_relay_active_high: bool = Field(default=True, alias="DOOR_RELAY_ACTIVE_HIGH")
     door_unlock_seconds: int = Field(default=5, alias="DOOR_UNLOCK_SECONDS")
 
     rfid_serial_port: str = Field(default="/dev/ttyUSB0", alias="RFID_SERIAL_PORT")

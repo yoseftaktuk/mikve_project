@@ -89,6 +89,7 @@ async def startup() -> None:
             door_unlock_seconds=settings.door_unlock_seconds,
             rfid_serial_port=settings.rfid_serial_port,
             rfid_baudrate=settings.rfid_baudrate,
+            door_relay_active_high=settings.door_relay_active_high,
         )
     await adapter.start()
     logger.info("startup_complete mode=%s", settings.hardware_mode)
