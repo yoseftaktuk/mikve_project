@@ -326,7 +326,7 @@ class RpiGpioController:
             logger.info("gpio_stopped")
 
     def open_door_sync(self, seconds: int) -> None:
-        """Pulse the door relay to the unlock level for the given seconds."""
+        """Unlock by driving the door pin (default: LOW / 0V), then restore idle level."""
         if GPIO is None or not self._gpio_ready:
             raise RuntimeError("GPIO is not initialized")
 
@@ -341,6 +341,7 @@ class RpiGpioController:
                 self._door_relay_active_high,
                 "LOW" if unlock == GPIO.LOW else "HIGH",
             )
+            # Default (active_high=False): unlock = LOW → no voltage on the pin while open.
             GPIO.output(self._door_pin, unlock)
             during = int(GPIO.input(self._door_pin))
             # #region agent log
