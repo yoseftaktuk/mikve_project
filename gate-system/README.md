@@ -62,7 +62,7 @@ docker compose up --build
 | כרטיס SD | 16 GB ומעלה |
 | רשת | Ethernet או Wi-Fi (לגישה לדשבורד מהדפדפן) |
 | מטבעון | פלט פולסים ל-GPIO |
-| ריליי לדלת | מחובר ל-GPIO (פתיחה ב-LOW / 0V; idle ב-HIGH) |
+| ריליי לדלת | מחובר ל-GPIO (נעול = פין מונע LOW; פתיחה = float כמו ניתוק IN1) |
 | קורא RFID (אופציונלי) | USB serial (`/dev/ttyUSB0`) |
 
 ### חיווט GPIO (מצב BCM)
@@ -70,7 +70,14 @@ docker compose up --build
 | פין BCM | תפקיד |
 |---------|--------|
 | **17** | קלט פולסים מהמטבעון (`FALLING`, pull-up פנימי) |
-| **22** | פלט ריליי לדלת (LOW/0V = דלת פתוחה; HIGH = נעול). פיזי: פין 15 |
+| **22** | ריליי דלת (פיזי: פין **15**). Idle = OUTPUT LOW (נעול); פתיחה = INPUT float (כמו ניתוק IN1) |
+
+חיווט מנעול fail-safe (מופעל = נעול) עם מודול ריליי פעיל-LOW:
+
+- `COM` ← 12V+, `NO` ← Lock(+), Lock(−) ← 12V−
+- `IN1` ← BCM 22 (פיזי 15), `VCC` ← 5V, `GND` משותף עם ה-Pi והספק
+- במנוחה הפין מונע LOW (כמו IN1 מחובר) → המנעול נעול
+- בפתיחה הפין ב-float (כמו ניתוק IN1) → המנעול נפתח
 
 מיפוי פולסים למטבעות (כמו בקוד המקורי):
 
@@ -127,7 +134,7 @@ HARDWARE_MODE=rpi
 # פינים (BCM)
 COIN_ACCEPTOR_GPIO_PIN=17
 DOOR_RELAY_GPIO_PIN=22
-DOOR_RELAY_ACTIVE_HIGH=false   # false = פתיחה ב-LOW (0V); true = פתיחה ב-HIGH
+DOOR_RELAY_IDLE_LEVEL=low   # driven while locked; unlock floats the pin (unplug IN1)
 
 # קורא RFID USB (אם קיים)
 RFID_SERIAL_PORT=/dev/ttyUSB0
@@ -208,7 +215,7 @@ curl -X POST http://<PI-IP>/api/chips/chips/<CHIP_ID>/balance/adjust \
                               │                              ├─ מספיק מזומן? → פתיחת דלת
                               │                              └─ צ'יפ תקין?  → ניכוי יתרה → פתיחת דלת
                               ▼
-                    ריליי דלת (GPIO 22) ── LOW/0V ל-DOOR_UNLOCK_SECONDS שניות
+                    ריליי דלת (GPIO 22) ── float (כמו ניתוק IN1) ל-DOOR_UNLOCK_SECONDS שניות
 ```
 
 - **מזומן**: המערכת צוברת מטבעות עד `ENTRANCE_FEE_CENTS`, ואז פותחת את הדלת. אם נכנס סכום חלקי ולא נוסף מטבע תוך `CASH_SESSION_TIMEOUT_SECONDS` (ברירת מחדל 20), הסכום מתאפס.

@@ -12,15 +12,19 @@ class Settings(CommonSettings):
     hardware_mode: str = Field(default="mock", alias="HARDWARE_MODE")  # mock|rpi
 
     door_relay_gpio_pin: int = Field(default=22, alias="DOOR_RELAY_GPIO_PIN")
-    # False (default): unlock = GPIO LOW (0V / no drive). Idle = HIGH.
-    # True: unlock = GPIO HIGH. Use only with active-HIGH relay modules.
-    door_relay_active_high: bool = Field(default=False, alias="DOOR_RELAY_ACTIVE_HIGH")
+    # Driven level while locked. Unlock floats the pin (INPUT/hi-Z), like unplugging IN1.
+    # "low" (default) or "high".
+    door_relay_idle_level: str = Field(default="low", alias="DOOR_RELAY_IDLE_LEVEL")
     door_unlock_seconds: int = Field(default=5, alias="DOOR_UNLOCK_SECONDS")
 
     rfid_serial_port: str = Field(default="/dev/ttyUSB0", alias="RFID_SERIAL_PORT")
     rfid_baudrate: int = Field(default=9600, alias="RFID_BAUDRATE")
 
     coin_acceptor_gpio_pin: int = Field(default=17, alias="COIN_ACCEPTOR_GPIO_PIN")
+
+    @property
+    def door_relay_idle_high(self) -> bool:
+        return self.door_relay_idle_level.strip().lower() in {"high", "1", "true"}
 
 
 settings = Settings()
