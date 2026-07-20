@@ -1,6 +1,9 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
+# #region agent log
+RUN node -e "require('dns').lookup('registry.npmjs.org', (err, addr) => { if (err) { console.error('[agent-debug] dns_status=FAIL host=registry.npmjs.org', err.message); console.error('[agent-debug] fix_hint=Set Docker Desktop DNS to your router IP (see deploy/docker-daemon.dns.example.json)'); process.exit(1); } console.log('[agent-debug] dns_status=OK registry.npmjs.org ->', addr); })"
+# #endregion
 COPY package.json package-lock.json /app/
 # npm ci can silently skip platform-specific optional native deps
 # (npm/cli#4828), leaving @rolldown/binding-*/*.node missing on arm64/musl.

@@ -152,6 +152,40 @@ class RpiGpioController:
     def gpio_ready(self) -> bool:
         return self._gpio_ready
 
+    def _release_gpio_pins(self, pins: list[int]) -> dict[str, Any]:
+        """Best-effort release of BCM pins before (re)claiming them."""
+        result: dict[str, Any] = {"pins": pins}
+        try:
+            GPIO.cleanup()
+            result["cleanup_called"] = True
+        except Exception as exc:
+            result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+
+        try:
+            import lgpio
+
+            chip = lgpio.gpiochip_open(0)
+            freed: list[int] = []
+            errors: dict[int, str] = {}
+            for pin in pins:
+                try:
+                    lgpio.gpio_free(chip, pin)
+                    freed.append(pin)
+                except Exception as exc:
+                    errors[pin] = f"{type(exc).__name__}: {exc}"
+            lgpio.gpiochip_close(chip)
+            result["lgpio_freed"] = freed
+            if errors:
+                result["lgpio_errors"] = errors
+        except Exception as exc:
+            result["lgpio_chip_error"] = f"{type(exc).__name__}: {exc}"
+
+        return result
+
+    def _configure_gpio_pins(self) -> None:
+        GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(self._door_pin, GPIO.OUT, initial=GPIO.LOW)
+
     def start(self) -> None:
         """Configure GPIO pins and start coin/RFID listener threads."""
         if GPIO is None:
@@ -161,16 +195,54 @@ class RpiGpioController:
             )
 
         # #region agent log
-        _agent_dbg("E", "rpi_gpio.py:start", "gpio_start_begin", {
+        _agent_dbg("GPIO-A,B,C", "rpi_gpio.py:start", "gpio_start_begin", {
             "coin_pin": self._coin_pin,
             "door_pin": self._door_pin,
+            "same_pin": self._coin_pin == self._door_pin,
         })
         # #endregion
 
+        if self._coin_pin == self._door_pin:
+            raise RuntimeError(
+                f"COIN_ACCEPTOR_GPIO_PIN and DOOR_RELAY_GPIO_PIN must differ (both={self._coin_pin})"
+            )
+
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(self._door_pin, GPIO.OUT, initial=GPIO.LOW)
+
+        try:
+            self._configure_gpio_pins()
+        except Exception as exc:
+            if "busy" not in str(exc).lower():
+                raise
+
+            release_result = self._release_gpio_pins([self._coin_pin, self._door_pin])
+            # #region agent log
+            _agent_dbg("GPIO-A,B", "rpi_gpio.py:start", "gpio_busy_retry_after_release", {
+                "error": f"{type(exc).__name__}: {exc}",
+                "coin_pin": self._coin_pin,
+                "door_pin": self._door_pin,
+                "release_result": release_result,
+            })
+            # #endregion
+
+            GPIO.setmode(GPIO.BCM)
+            try:
+                self._configure_gpio_pins()
+            except Exception as retry_exc:
+                # #region agent log
+                _agent_dbg("GPIO-B", "rpi_gpio.py:start", "gpio_busy_retry_failed", {
+                    "error": f"{type(retry_exc).__name__}: {retry_exc}",
+                    "coin_pin": self._coin_pin,
+                    "door_pin": self._door_pin,
+                    "hint": "Another process/container may hold these GPIO lines. Run: docker ps && sudo gpioinfo gpiochip0",
+                })
+                # #endregion
+                raise RuntimeError(
+                    f"GPIO pin busy (coin={self._coin_pin}, door={self._door_pin}). "
+                    "Stop duplicate hardware-service containers or other GPIO apps on the Pi."
+                ) from retry_exc
+
         GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
         self._gpio_ready = True
         logger.info("gpio_started coin_pin=%s door_pin=%s", self._coin_pin, self._door_pin)

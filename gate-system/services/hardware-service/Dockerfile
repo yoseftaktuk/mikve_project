@@ -8,6 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN pip install --no-cache-dir -U pip
 
 COPY shared/py /app/shared/py
+COPY deploy/scripts/build-dns-check.sh /tmp/build-dns-check.sh
+RUN chmod +x /tmp/build-dns-check.sh && /tmp/build-dns-check.sh
 COPY services/hardware-service/requirements.txt /app/requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
