@@ -163,6 +163,7 @@ class RpiGpioController:
     def _float_door_pin(self) -> None:
         """Release the door pin (same electrical state as unplugging IN1)."""
         GPIO.setup(self._door_pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+
     @property
     def rfid_connected(self) -> bool:
         return self._rfid_connected
@@ -343,28 +344,38 @@ class RpiGpioController:
                     "HIGH" if self._door_relay_idle_high else "LOW",
                 )
                 self._float_door_pin()
+                time.sleep(0.05)
+                during_samples = [int(GPIO.input(self._door_pin)) for _ in range(5)]
                 # #region agent log
-                _agent_dbg("RELAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_unlock_asserted", {
+                _agent_dbg("PAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_unlock_asserted", {
                     "door_pin": self._door_pin,
                     "seconds": seconds,
                     "mode": "float",
                     "level_before": before,
                     "pin_mode_during": "IN_PUD_OFF",
+                    "level_during_samples": during_samples,
+                    "hint": "If samples stay 0 while wire attached, float may not match physical unplug",
                 })
                 # #endregion
-                time.sleep(seconds)
+                logger.info(
+                    "door_unlock_float pin=%s before=%s during_samples=%s",
+                    self._door_pin,
+                    before,
+                    during_samples,
+                )
+                time.sleep(max(0.0, seconds - 0.05))
             finally:
                 self._apply_door_idle()
                 after = int(GPIO.input(self._door_pin))
                 # #region agent log
-                _agent_dbg("RELAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_idle_restored", {
+                _agent_dbg("PAY-A,B,C", "rpi_gpio.py:open_door_sync", "door_idle_restored", {
                     "door_pin": self._door_pin,
                     "mode": "OUT",
                     "level_after": after,
                     "expected_after": int(idle),
                 })
                 # #endregion
-                logger.info("door_closed pin=%s mode=idle_output", self._door_pin)
+                logger.info("door_closed pin=%s mode=idle_output level=%s", self._door_pin, after)
 
     def _pulse_detected(self, _channel: Any) -> None:
         """Count a falling-edge pulse from the coin acceptor."""
