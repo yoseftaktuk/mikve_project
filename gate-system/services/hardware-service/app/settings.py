@@ -22,6 +22,10 @@ class Settings(CommonSettings):
 
     coin_acceptor_gpio_pin: int = Field(default=17, alias="COIN_ACCEPTOR_GPIO_PIN")
 
+    # AS608/R307 fingerprint sensor over UART. Empty disables the reader.
+    fingerprint_serial_port: str = Field(default="", alias="FINGERPRINT_SERIAL_PORT")
+    fingerprint_baudrate: int = Field(default=57600, alias="FINGERPRINT_BAUDRATE")
+
     @property
     def door_relay_idle_high(self) -> bool:
         return self.door_relay_idle_level.strip().lower() in {"high", "1", "true"}

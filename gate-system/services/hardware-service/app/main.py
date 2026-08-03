@@ -8,8 +8,15 @@ from fastapi import FastAPI, status
 
 from gate_shared.logging import configure_logging
 
+from .fingerprint import STEP_STORED
 from .hardware import MockHardwareAdapter, RpiHardwareAdapter
-from .schemas import DoorOpenRequest, SimulateCashRequest, SimulateRfidRequest
+from .schemas import (
+    DoorOpenRequest,
+    FingerprintEnrollRequest,
+    SimulateCashRequest,
+    SimulateFingerprintRequest,
+    SimulateRfidRequest,
+)
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -29,49 +36,11 @@ adapter = None
 async def _publish(channel: str, event: dict) -> None:
     """Publish a JSON event to a Redis pub/sub channel."""
     if redis_client is None:
-        # #region agent log
-        try:
-            from .rpi_gpio import _agent_dbg
-
-            _agent_dbg("C", "main.py:_publish", "redis_client_none", {"channel": channel, "type": event.get("type")})
-        except Exception:
-            pass
-        # #endregion
         return
     try:
-        receivers = await asyncio.wait_for(redis_client.publish(channel, json.dumps(event)), timeout=3.0)
-        # #region agent log
-        try:
-            from .rpi_gpio import _agent_dbg
-
-            _agent_dbg(
-                "C",
-                "main.py:_publish",
-                "redis_publish_ok",
-                {"channel": channel, "type": event.get("type"), "receivers": receivers},
-            )
-        except Exception:
-            pass
-        # #endregion
-    except Exception as exc:
-        # #region agent log
-        try:
-            from .rpi_gpio import _agent_dbg
-
-            _agent_dbg(
-                "C",
-                "main.py:_publish",
-                "redis_publish_failed",
-                {
-                    "channel": channel,
-                    "type": event.get("type"),
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "redis_url": (settings.redis_url or "")[:80],
-                },
-            )
-        except Exception:
-            pass
-        # #endregion
+        # A hung publish would silently stall coin/RFID events, so fail loudly instead.
+        await asyncio.wait_for(redis_client.publish(channel, json.dumps(event)), timeout=3.0)
+    except Exception:
         logger.exception("redis_publish_failed channel=%s type=%s", channel, event.get("type"))
         raise
 
@@ -90,23 +59,6 @@ async def on_rfid_scan(uid: str) -> None:
 
 async def on_cash_inserted(amount_cents: int) -> None:
     """Publish a cash.inserted event when a coin is accepted."""
-    # #region agent log
-    try:
-        from .rpi_gpio import _agent_dbg
-
-        _agent_dbg(
-            "C",
-            "main.py:on_cash_inserted",
-            "publishing_cash_inserted",
-            {
-                "amount_cents": amount_cents,
-                "redis_ready": redis_client is not None,
-                "redis_url_host": (settings.redis_url or "").split("@")[-1][:80],
-            },
-        )
-    except Exception:
-        pass
-    # #endregion
     await _publish(
         "hardware.events",
         {
@@ -115,19 +67,41 @@ async def on_cash_inserted(amount_cents: int) -> None:
             "ts": datetime.now(timezone.utc).isoformat(),
         },
     )
-    # #region agent log
-    try:
-        from .rpi_gpio import _agent_dbg
 
-        _agent_dbg(
-            "C",
-            "main.py:on_cash_inserted",
-            "published_cash_inserted",
-            {"amount_cents": amount_cents},
-        )
-    except Exception:
-        pass
-    # #endregion
+
+async def on_fingerprint_scan(slot: int, confidence: int) -> None:
+    """Publish a fingerprint.scan event when a stored template matches."""
+    await _publish(
+        "hardware.events",
+        {
+            "type": "fingerprint.scan",
+            "slot": slot,
+            "confidence": confidence,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+async def on_fingerprint_unmatched() -> None:
+    """Publish a fingerprint.unmatched event for a finger with no stored template."""
+    await _publish(
+        "hardware.events",
+        {"type": "fingerprint.unmatched", "ts": datetime.now(timezone.utc).isoformat()},
+    )
+
+
+async def on_fingerprint_progress(session_id: str, step: str, slot: int | None) -> None:
+    """Publish an enrollment progress step so the dashboard can guide the user."""
+    await _publish(
+        "hardware.events",
+        {
+            "type": "fingerprint.enroll_progress",
+            "session_id": session_id,
+            "step": step,
+            "slot": slot,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 @app.on_event("startup")
@@ -137,7 +111,13 @@ async def startup() -> None:
     configure_logging(settings.service_name, settings.log_level)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     if settings.hardware_mode == "mock":
-        adapter = MockHardwareAdapter(on_rfid_scan=on_rfid_scan, on_cash_inserted=on_cash_inserted)
+        adapter = MockHardwareAdapter(
+            on_rfid_scan=on_rfid_scan,
+            on_cash_inserted=on_cash_inserted,
+            on_fingerprint_scan=on_fingerprint_scan,
+            on_fingerprint_unmatched=on_fingerprint_unmatched,
+            on_fingerprint_progress=on_fingerprint_progress,
+        )
     else:
         adapter = RpiHardwareAdapter(
             on_rfid_scan=on_rfid_scan,
@@ -148,6 +128,11 @@ async def startup() -> None:
             rfid_serial_port=settings.rfid_serial_port,
             rfid_baudrate=settings.rfid_baudrate,
             door_relay_idle_high=settings.door_relay_idle_high,
+            on_fingerprint_scan=on_fingerprint_scan,
+            on_fingerprint_unmatched=on_fingerprint_unmatched,
+            on_fingerprint_progress=on_fingerprint_progress,
+            fingerprint_serial_port=settings.fingerprint_serial_port,
+            fingerprint_baudrate=settings.fingerprint_baudrate,
         )
     await adapter.start()
     logger.info("startup_complete mode=%s", settings.hardware_mode)
@@ -179,6 +164,7 @@ async def get_status():
         "rfid_reader_connected": st.rfid_reader_connected,
         "coin_acceptor_connected": st.coin_acceptor_connected,
         "door_relay_connected": st.door_relay_connected,
+        "fingerprint_reader_connected": st.fingerprint_reader_connected,
     }
 
 
@@ -202,6 +188,43 @@ async def open_door(req: DoorOpenRequest):
     return None
 
 
+async def _enroll_task(session_id: str) -> None:
+    """Run enrollment and publish fingerprint.enrolled once a template is stored."""
+    try:
+        result = await adapter.enroll_fingerprint(session_id)
+    except Exception:
+        logger.exception("fingerprint_enroll_failed session=%s", session_id)
+        await on_fingerprint_progress(session_id, "failed", None)
+        return
+
+    if result.get("step") != STEP_STORED:
+        return
+
+    await _publish(
+        "hardware.events",
+        {
+            "type": "fingerprint.enrolled",
+            "session_id": session_id,
+            "slot": result.get("slot"),
+            "ts": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+@app.post("/fingerprint/enroll", status_code=status.HTTP_202_ACCEPTED)
+async def enroll_fingerprint(req: FingerprintEnrollRequest):
+    """Start a fingerprint enrollment; progress arrives as Redis events."""
+    asyncio.create_task(_enroll_task(req.session_id))
+    return {"session_id": req.session_id, "status": "started"}
+
+
+@app.post("/fingerprint/enroll/cancel", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_fingerprint_enroll():
+    """Abort a running fingerprint enrollment."""
+    await adapter.cancel_enroll()
+    return None
+
+
 # Dev endpoints (mock mode)
 @app.post("/dev/rfid/scan", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
 async def dev_scan(req: SimulateRfidRequest):
@@ -218,4 +241,13 @@ async def dev_cash(req: SimulateCashRequest):
     if settings.hardware_mode != "mock":
         return None
     await adapter.simulate_cash_inserted(req.amount_cents)
+    return None
+
+
+@app.post("/dev/fingerprint/scan", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
+async def dev_fingerprint(req: SimulateFingerprintRequest):
+    """Simulate a fingerprint match (or no-match) in mock mode only."""
+    if settings.hardware_mode != "mock":
+        return None
+    await adapter.simulate_fingerprint_scan(req.slot)
     return None

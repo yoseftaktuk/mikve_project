@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../../app/api'
+import { formatMoney } from '../../../app/money'
 import type { ChipToastData } from '../../../components/ChipToast/types'
 import type { GateStatus } from '../../../components/GateEntrancePanel'
+import type { PendingApproval } from '../../../types/fingerprint'
+import type { TopupOffer } from '../../../types/topup'
 
 type WsEvent = {
   type?: string
   method?: string
   uid?: string | null
+  chip_id?: string
   reason?: string
   balance_cents?: number
   balance_after_cents?: number
@@ -17,6 +21,9 @@ type WsEvent = {
   remaining_cents?: number
   previous_total_cents?: number
   timeout_seconds?: number
+  approval_id?: string
+  holder_name?: string | null
+  expires_in_seconds?: number
 }
 
 type AccessDecision = {
@@ -34,17 +41,20 @@ type SimulateCashResult = {
   remaining_cents: number
 }
 
-/** Format an amount in cents as an Israeli shekel string. */
-export function formatMoney(cents: number) {
-  return `₪${(cents / 100).toFixed(2)}`
-}
+export { formatMoney }
 
-function grantedToast(event: { balance_after_cents?: number; remaining_cents?: number; method?: string }): ChipToastData {
+function grantedToast(event: {
+  balance_after_cents?: number
+  remaining_cents?: number
+  method?: string
+  holder_name?: string | null
+}): ChipToastData {
   const isCash = event.method === 'cash'
   const changeCents = event.remaining_cents ?? 0
+  const name = event.holder_name?.trim()
   return {
     kind: 'granted',
-    title: 'הדלת נפתחה',
+    title: name ? `שלום ${name}` : 'הדלת נפתחה',
     message: isCash ? 'תשלום התקבל בהצלחה. ברוך הבא!' : 'ניכוי עלות כניסה בוצע בהצלחה. ברוך הבא!',
     balanceCents: isCash
       ? changeCents > 0
@@ -62,6 +72,35 @@ function isCashGrantedEvent(event: WsEvent): boolean {
   )
 }
 
+function fingerprintDeniedToast(event: WsEvent): ChipToastData {
+  const name = event.holder_name?.trim()
+  if (event.reason === 'insufficient_balance') {
+    return {
+      kind: 'denied',
+      title: name ? `${name} — אין מספיק יתרה` : 'אין מספיק יתרה',
+      message:
+        event.fee_cents != null
+          ? `נדרשים ${formatMoney(event.fee_cents)} לכניסה. פנה לדלפק לטעינת יתרה.`
+          : 'אין מספיק יתרה. פנה לדלפק לטעינת יתרה.',
+      balanceCents: event.balance_cents ?? null,
+    }
+  }
+  if (event.reason === 'chip_disabled') {
+    return {
+      kind: 'denied',
+      title: name ? `${name} — חסום` : 'המשתמש חסום',
+      message: 'הכניסה עבור טביעת האצבע הזו אינה פעילה. פנה למנהל המערכת.',
+      balanceCents: event.balance_cents ?? null,
+    }
+  }
+  return {
+    kind: 'denied',
+    title: 'טביעת אצבע לא מזוהה',
+    message: 'טביעת האצבע לא רשומה במערכת. פנה לדלפק לרישום.',
+    balanceCents: null,
+  }
+}
+
 function chipToastFromEvent(event: WsEvent): ChipToastData | null {
   if (isCashGrantedEvent(event)) {
     return grantedToast({ method: 'cash', remaining_cents: event.remaining_cents })
@@ -69,6 +108,10 @@ function chipToastFromEvent(event: WsEvent): ChipToastData | null {
 
   if (event.type === 'access.granted' && event.uid) {
     return grantedToast(event)
+  }
+
+  if (event.type === 'access.denied' && event.method === 'fingerprint') {
+    return fingerprintDeniedToast(event)
   }
 
   if (event.type === 'access.denied' && event.uid != null) {
@@ -133,6 +176,11 @@ export function useDashboardPage() {
   const [lastActivity, setLastActivity] = useState<string | null>(null)
   const [simError, setSimError] = useState<string | null>(null)
   const [simLoading, setSimLoading] = useState(false)
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null)
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false)
+  const [approvalError, setApprovalError] = useState<string | null>(null)
+  const [topupOffer, setTopupOffer] = useState<TopupOffer | null>(null)
+  const [cardTopupOpen, setCardTopupOpen] = useState(false)
   const toastTimer = useRef<number | null>(null)
 
   const wsUrl = useMemo(() => {
@@ -202,6 +250,52 @@ export function useDashboardPage() {
     [refreshStatus, showChipToast],
   )
 
+  const approvePending = useCallback(async () => {
+    if (!pendingApproval) return
+    setApprovalSubmitting(true)
+    setApprovalError(null)
+    try {
+      await api.post('/access/fingerprint/approve', { approval_id: pendingApproval.approvalId })
+      setPendingApproval(null)
+      refreshStatus()
+    } catch {
+      setApprovalError('האישור נכשל או פג. בקש מהנכנס לסרוק שוב.')
+    } finally {
+      setApprovalSubmitting(false)
+    }
+  }, [pendingApproval, refreshStatus])
+
+  const cancelPending = useCallback(async () => {
+    if (!pendingApproval) return
+    const approvalId = pendingApproval.approvalId
+    setPendingApproval(null)
+    setApprovalError(null)
+    try {
+      await api.post('/access/fingerprint/cancel', { approval_id: approvalId })
+    } catch {
+      // The approval expires on its own, so a failed cancel needs no user action.
+    }
+  }, [pendingApproval])
+
+  const dismissTopupOffer = useCallback(() => {
+    setTopupOffer(null)
+    setCardTopupOpen(false)
+  }, [])
+
+  const chooseCoinsTopup = useCallback(() => {
+    setTopupOffer(null)
+    setCardTopupOpen(false)
+    setLastActivity('הכנס מטבעות לתשלום עלות הכניסה')
+  }, [])
+
+  const chooseCardTopup = useCallback(() => {
+    setCardTopupOpen(true)
+  }, [])
+
+  const onCardTopupPaid = useCallback((balanceAfterCents: number) => {
+    setLastActivity(`יתרה נטענה בהצלחה — ${formatMoney(balanceAfterCents)}. סרוק שוב לכניסה.`)
+  }, [])
+
   useEffect(() => {
     refreshStatus()
     const interval = window.setInterval(refreshStatus, 10000)
@@ -220,9 +314,65 @@ export function useDashboardPage() {
 
       refreshStatus()
 
+      if (event.type === 'access.pending' && event.approval_id) {
+        setApprovalError(null)
+        setTopupOffer(null)
+        setCardTopupOpen(false)
+        setPendingApproval({
+          approvalId: event.approval_id,
+          uid: event.uid ?? '',
+          holderName: event.holder_name ?? null,
+          balanceCents: event.balance_cents ?? 0,
+          feeCents: event.fee_cents ?? 0,
+          expiresInSeconds: event.expires_in_seconds ?? 25,
+        })
+        setLastActivity(
+          event.holder_name
+            ? `טביעת אצבע זוהתה — ${event.holder_name} ממתין לאישור`
+            : 'טביעת אצבע זוהתה — ממתין לאישור',
+        )
+        return
+      }
+
+      if (event.type === 'access.topup_needed' && event.uid && event.chip_id) {
+        setPendingApproval(null)
+        setChipToast(null)
+        setCardTopupOpen(false)
+        setTopupOffer({
+          uid: event.uid,
+          chipId: event.chip_id,
+          holderName: event.holder_name ?? null,
+          balanceCents: event.balance_cents ?? 0,
+          feeCents: event.fee_cents ?? 0,
+        })
+        setLastActivity(
+          event.holder_name
+            ? `${event.holder_name} — אין מספיק יתרה, ממתין לבחירת טעינה`
+            : 'אין מספיק יתרה — ממתין לבחירת טעינה',
+        )
+        return
+      }
+
+      if (
+        event.type === 'access.pending_cleared' ||
+        event.type === 'access.granted' ||
+        event.type === 'access.denied'
+      ) {
+        setPendingApproval((current) =>
+          current && (!event.approval_id || event.approval_id === current.approvalId) ? null : current,
+        )
+      }
+
       const toast = chipToastFromEvent(event)
       if (toast) {
         showChipToast(toast)
+      }
+
+      if (event.type === 'access.pending_cleared') {
+        setLastActivity(
+          event.reason === 'timeout' ? 'האישור פג — נדרשת סריקה חדשה' : 'האישור בוטל',
+        )
+        return
       }
 
       if (event.type === 'cash.accumulated' && event.total_cents != null && event.required_cents != null) {
@@ -248,9 +398,20 @@ export function useDashboardPage() {
     simError,
     simLoading,
     cashProgress,
+    pendingApproval,
+    approvalSubmitting,
+    approvalError,
+    topupOffer,
+    cardTopupOpen,
     dismissChipToast,
     simulateChip,
     simulateCash,
+    approvePending,
+    cancelPending,
+    dismissTopupOffer,
+    chooseCoinsTopup,
+    chooseCardTopup,
+    onCardTopupPaid,
     formatMoney,
   }
 }

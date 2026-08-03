@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../../app/api'
 import { managementApi } from '../../../app/managementApi'
-import { clearManagementToken, getManagementToken, setManagementToken } from '../../../app/managementStorage'
+import { formatMoney, parseShekelsToCents } from '../../../app/money'
+import { useManagementAuth } from '../../../hooks/useManagementAuth'
 
 type GateStatus = {
   door_unlock_seconds: number
@@ -12,6 +13,7 @@ type ChipInfo = {
   chip_id: string
   balance_cents: number
   is_enabled: boolean
+  holder_name?: string | null
 }
 
 type TopupResult = {
@@ -21,24 +23,9 @@ type TopupResult = {
   added_cents: number
 }
 
-function formatMoney(cents: number) {
-  return `₪${(cents / 100).toFixed(2)}`
-}
-
-function parseShekelsToCents(value: string): number | null {
-  const normalized = value.trim().replace(',', '.')
-  if (!normalized) return null
-  const shekels = Number(normalized)
-  if (!Number.isFinite(shekels) || shekels <= 0) return null
-  return Math.round(shekels * 100)
-}
-
 /** Management auth, chip lookup/top-up, and manual door controls. */
 export function useManagementPage() {
-  const [authenticated, setAuthenticated] = useState(() => Boolean(getManagementToken()))
-  const [pin, setPin] = useState('')
-  const [pinError, setPinError] = useState<string | null>(null)
-  const [pinLoading, setPinLoading] = useState(false)
+  const { authenticated, pin, setPin, pinError, pinLoading, onPinSubmit, logout: clearAuth } = useManagementAuth()
 
   const [uid, setUid] = useState('')
   const [amountShekels, setAmountShekels] = useState('')
@@ -52,29 +39,12 @@ export function useManagementPage() {
     api.get<GateStatus>('/access/healthz').then((r) => setGateStatus(r.data)).catch(() => {})
   }, [])
 
-  const onPinSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault()
-    setPinLoading(true)
-    setPinError(null)
-    try {
-      const res = await managementApi.post<{ token: string }>('/access/management/auth', { pin })
-      setManagementToken(res.data.token)
-      setAuthenticated(true)
-      setPin('')
-    } catch {
-      setPinError('קוד שגוי. נסה שוב.')
-    } finally {
-      setPinLoading(false)
-    }
-  }, [pin])
-
   const logout = useCallback(() => {
-    clearManagementToken()
-    setAuthenticated(false)
+    clearAuth()
     setChipInfo(null)
     setActionError(null)
     setActionSuccess(null)
-  }, [])
+  }, [clearAuth])
 
   const lookupChip = useCallback(async () => {
     if (!uid.trim()) {

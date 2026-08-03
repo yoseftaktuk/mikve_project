@@ -9,13 +9,14 @@ Production-ready starter for a physical entrance gate with RFID/NFC access, bala
 - **Database**: PostgreSQL (normalized tables, separated by service schemas)
 - **Cache/Broker**: Redis (caching + pub/sub for real-time events)
 - **Reverse proxy**: Nginx (single public entrypoint)
-- **Management**: PIN-protected panel for chip top-up and manual door open
+- **Management**: PIN-protected panel for chip top-up, fingerprint enrollment, and manual door open
+- **Fingerprint**: AS608/R307 sensor — enroll a named person, then confirm each entry from the dashboard
 - **Hardware**: Raspberry Pi GPIO/serial abstraction with **mock mode**
 
 Services:
 
-- `chip-service`: chip registry, balances, chip history
-- `hardware-service`: RFID reader + coin acceptor + relay lock + health monitoring
+- `chip-service`: chip registry, balances, chip history (fingerprints are virtual chips `FP-<slot>`)
+- `hardware-service`: RFID reader + coin acceptor + relay lock + fingerprint sensor + health monitoring
 - `access-control-service`: orchestrates entrance authorization, logs access, real-time events
 
 ## Quickstart (Docker)
@@ -28,8 +29,12 @@ cp .env.example .env
 cp services/chip-service/.env.example services/chip-service/.env
 cp services/hardware-service/.env.example services/hardware-service/.env
 cp services/access-control-service/.env.example services/access-control-service/.env
+cp services/payment-service/.env.example services/payment-service/.env
 cp apps/dashboard/.env.example apps/dashboard/.env
 ```
+
+> `.env` files are ignored by git and never committed — they hold machine-local
+> values and secrets. Only the `.env.example` files are tracked.
 
 2. Start everything:
 
@@ -58,6 +63,18 @@ docker compose -f docker-compose.yml up --build
 - Services publish events to Redis channels (e.g. `hardware.events`, `access.events`).
 - `access-control-service` exposes WebSockets at `/ws/events` and forwards pub/sub events to connected dashboards.
 
+Fingerprint-related events:
+
+| Event | Channel | Meaning |
+|-------|---------|---------|
+| `fingerprint.scan` | `hardware.events` | sensor matched a stored template (`slot`, `confidence`) |
+| `fingerprint.unmatched` | `hardware.events` | a finger was read but matched nothing |
+| `fingerprint.enroll_progress` | `hardware.events` | enrollment step (`place_finger`, `remove_finger`, `place_again`, `stored`, `duplicate`, …) |
+| `fingerprint.enrolled` | `hardware.events` | template stored in the sensor (`session_id`, `slot`) |
+| `access.pending` | `access.events` | scan resolved to a person, waiting for confirmation (nothing charged yet) |
+| `access.pending_cleared` | `access.events` | approval expired, cancelled, or replaced by a newer scan |
+| `fingerprint.registered` | `access.events` | virtual chip `FP-<slot>` created/renamed with its balance |
+
 ## הפעלה על Raspberry Pi
 
 מדריך להרצת מערכת השער על Raspberry Pi (דגם B או חדש יותר) עם מטבעון, קורא צ'יפים וריליי לדלת.
@@ -72,6 +89,7 @@ docker compose -f docker-compose.yml up --build
 | מטבעון | פלט פולסים ל-GPIO |
 | ריליי לדלת | מחובר ל-GPIO (נעול = פין מונע LOW; פתיחה = float כמו ניתוק IN1) |
 | קורא RFID (אופציונלי) | USB serial (`/dev/ttyUSB0`) |
+| חיישן טביעת אצבע (אופציונלי) | AS608 / R307 ב-UART (`/dev/serial0` או USB-TTL) |
 
 ### חיווט GPIO (מצב BCM)
 
@@ -86,6 +104,37 @@ docker compose -f docker-compose.yml up --build
 - `IN1` ← BCM 22 (פיזי 15), `VCC` ← 5V, `GND` משותף עם ה-Pi והספק
 - במנוחה הפין מונע LOW (כמו IN1 מחובר) → המנעול נעול
 - בפתיחה הפין ב-float (כמו ניתוק IN1) → המנעול נפתח
+
+### חיווט חיישן טביעת אצבע (AS608 / R307)
+
+החיישן עובד ב-**3.3V** בלבד — חיבור ל-5V ישרוף אותו.
+
+| חוט בחיישן | חיבור ב-Pi |
+|------------|-------------|
+| VCC (אדום) | 3.3V (פין 1) |
+| GND (שחור) | GND (פין 6) |
+| TX (ירוק) | RX = BCM 15 / GPIO15 (פין 10) |
+| RX (לבן) | TX = BCM 14 / GPIO14 (פין 8) |
+
+שים לב ל-**הצלבה**: TX של החיישן ל-RX של ה-Pi ולהיפך.
+
+שתי אפשרויות חיבור:
+
+- **UART של ה-Pi** (`/dev/serial0`): הרץ `sudo raspi-config` → *Interface Options* → *Serial Port* → כבה shell על הפורט, הפעל את החומרה, ואתחל.
+- **מתאם USB-TTL** (`/dev/ttyUSB1`): פשוט יותר, לא דורש raspi-config, ומשאיר את `/dev/ttyUSB0` לקורא ה-RFID.
+
+הגדרה ב-`services/hardware-service/.env` (ריק = מנוטרל):
+
+```env
+FINGERPRINT_SERIAL_PORT=/dev/serial0
+FINGERPRINT_BAUDRATE=57600
+```
+
+בדיקה שהחיישן זוהה:
+
+```bash
+curl http://<PI-IP>/api/hardware/status   # fingerprint_reader_connected: true
+```
 
 מיפוי פולסים למטבעות (כמו בקוד המקורי):
 
@@ -129,6 +178,7 @@ cp .env.example .env
 cp services/chip-service/.env.example services/chip-service/.env
 cp services/hardware-service/.env.example services/hardware-service/.env
 cp services/access-control-service/.env.example services/access-control-service/.env
+cp services/payment-service/.env.example services/payment-service/.env
 cp apps/dashboard/.env.example apps/dashboard/.env
 ```
 
@@ -156,7 +206,8 @@ RFID_BAUDRATE=9600
 ENTRANCE_FEE_CENTS=500    # באגורות: 500 = ₪5
 DOOR_UNLOCK_SECONDS=5     # כמה שניות הדלת פתוחה
 CASH_SESSION_TIMEOUT_SECONDS=20  # איפוס תשלום מזומן חלקי אם לא נכנס מטבע נוסף
-MANAGEMENT_PIN=1234       # קוד סודי לדף ניהול (הטענת צ'יפ / פתיחת דלת)
+MANAGEMENT_PIN=1234       # קוד סודי לדף ניהול (הטענת צ'יפ / פתיחת דלת / רישום אצבע)
+FINGERPRINT_APPROVAL_TIMEOUT_SECONDS=25  # כמה זמן חלון האישור אחרי סריקת אצבע
 ```
 
 אחרי שינוי מחיר, זמן דלת או קוד ניהול:
@@ -215,22 +266,54 @@ curl -X POST http://<PI-IP>/api/chips/chips/<CHIP_ID>/balance/adjust \
   -d '{"delta_cents": 1000, "reason": "topup", "description": "initial balance"}'
 ```
 
-### 7. איך זה עובד בפועל
+### 7. רישום טביעת אצבע
+
+בדשבורד: **🫆 רישום אצבע** ← הזן את קוד הניהול (`MANAGEMENT_PIN`).
+
+1. הזן **שם מלא** ואופציונלית **יתרה התחלתית** (₪), ולחץ **התחל רישום**.
+2. עקוב אחרי ההוראות על המסך — הן מגיעות מהחיישן בזמן אמת:
+   `הנח את האצבע` → `הרם את האצבע` → `הנח את אותה אצבע שוב`.
+3. בסיום נוצר כרטיס אישי בשם שהזנת. אם האצבע כבר רשומה, המסך מציג `האצבע הזו כבר רשומה` ולא נוצר כרטיס כפול.
+
+כל אצבע נשמרת בחיישן עצמו (ההשוואה מתבצעת שם), והמערכת שומרת רק **כרטיס וירטואלי** עם ה-UID `FP-<slot>` — לכן טעינת יתרה, היסטוריה ודף הניהול עובדים עליה בדיוק כמו על צ'יפ רגיל:
+
+```bash
+# טעינת יתרה לאצבע שנרשמה בחריץ 12 (דרך דף הניהול או ישירות)
+curl -X POST http://<PI-IP>/api/access/management/chip/topup \
+  -H "Content-Type: application/json" \
+  -H "X-Management-Token: <TOKEN>" \
+  -d '{"uid": "FP-012", "amount_cents": 5000}'
+```
+
+### 8. כניסה עם טביעת אצבע (דורשת אישור)
+
+בשונה מצ'יפ, סריקת אצבע **לא מחייבת מיד**:
+
+1. הנכנס מצמיד אצבע לחיישן.
+2. בדשבורד נפתחת חלונית עם **השם** של הנרשם, היתרה, עלות הכניסה וספירה לאחור.
+3. לחיצה על **שלם ופתח דלת** מנכה את עלות הכניסה ופותחת את הדלת. **ביטול** סוגר בלי לחייב.
+4. אם לא נלחץ כלום תוך `FINGERPRINT_APPROVAL_TIMEOUT_SECONDS` (ברירת מחדל 25 שניות) האישור פג, ואין חיוב.
+
+אצבע שלא מזוהה, כרטיס חסום או יתרה חסרה — מוצגים כהודעת דחייה בלי חלונית אישור.
+
+### 9. איך זה עובד בפועל
 
 ```
-מטבעון (GPIO 17) ──► hardware-service ──► Redis ──► access-control-service
+מטבעון (GPIO 17)  ──► hardware-service ──► Redis ──► access-control-service
 קורא RFID (USB)   ──►       │                              │
-                              │                              ├─ מספיק מזומן? → פתיחת דלת
-                              │                              └─ צ'יפ תקין?  → ניכוי יתרה → פתיחת דלת
-                              ▼
+חיישן אצבע (UART) ──►       │                              ├─ מספיק מזומן? → פתיחת דלת
+                            │                              ├─ צ'יפ תקין?   → ניכוי יתרה → פתיחת דלת
+                            │                              └─ אצבע זוהתה?  → אישור בדשבורד → ניכוי → פתיחה
+                            ▼
                     ריליי דלת (GPIO 22) ── float (כמו ניתוק IN1) ל-DOOR_UNLOCK_SECONDS שניות
 ```
 
 - **מזומן**: המערכת צוברת מטבעות עד `ENTRANCE_FEE_CENTS`, ואז פותחת את הדלת. אם נכנס סכום חלקי ולא נוסף מטבע תוך `CASH_SESSION_TIMEOUT_SECONDS` (ברירת מחדל 20), הסכום מתאפס.
 - **צ'יפ**: ניכוי עלות כניסה מהיתרה; אם יש מספיק כסף — הדלת נפתחת.
+- **טביעת אצבע**: זיהוי בחיישן → חלונית אישור עם השם → רק לחיצה על הכפתור מחייבת ופותחת.
 - **דשבורד**: מציג הודעות, יתרת צ'יפ וסכום מזומן שנצבר.
 
-### 8. הפעלה אוטומטית אחרי אתחול
+### 10. הפעלה אוטומטית אחרי אתחול
 
 ```bash
 cd ~/gate-system
@@ -258,7 +341,7 @@ sudo systemctl start gate-system
 
 > עדכן את `WorkingDirectory` אם הפרויקט לא ב-`/home/pi/gate-system`.
 
-### 9. פתרון בעיות נפוצות
+### 11. פתרון בעיות נפוצות
 
 | בעיה | מה לבדוק |
 |------|-----------|
@@ -266,6 +349,8 @@ sudo systemctl start gate-system
 | דלת לא נפתחת | פין 22, ריליי, `docker compose logs hardware-service` |
 | צ'יפ נדחה | הצ'יפ רשום? יש יתרה ≥ `ENTRANCE_FEE_CENTS`? |
 | RFID לא עובד | `ls /dev/ttyUSB*`, עדכן `RFID_SERIAL_PORT` ב-`.env` |
+| אצבע לא נסרקת | `FINGERPRINT_SERIAL_PORT` נכון? החיישן ב-3.3V? TX/RX מוצלבים? |
+| חלונית האישור לא נפתחת | האצבע רשומה (`FP-<slot>` קיים)? יש יתרה מספקת? בדוק `docker compose logs access-control-service` |
 | שגיאת GPIO ב-Docker | ודא `privileged: true` ו-`/dev/gpiomem` ב-`deploy/docker-compose.pi.yml` |
 | שינוי מחיר לא נכנס | ערוך `access-control-service/.env` והפעל מחדש את השירות |
 
@@ -281,6 +366,19 @@ docker compose up --build
 ```
 
 בדשבורד: **כלי פיתוח (סימולציה)** — סימולציית צ'יפ / מזומן.
+
+סימולציית טביעת אצבע (mock בלבד) — החריץ שהוחזר בעת הרישום, למשל 1:
+
+```bash
+curl -X POST http://localhost/api/hardware/dev/fingerprint/scan \
+  -H "Content-Type: application/json" -d '{"slot": 1}'
+
+# אצבע שלא מזוהה
+curl -X POST http://localhost/api/hardware/dev/fingerprint/scan \
+  -H "Content-Type: application/json" -d '{"slot": null}'
+```
+
+ב-mock, **רישום אצבע** מתקדם אוטומטית בין השלבים (שנייה לכל שלב) ומקצה חריץ עולה, כך שאפשר לבדוק את כל הזרימה בלי חיישן.
 
 ## Split deployment (Pi edge + LAN backend)
 
@@ -424,7 +522,18 @@ gate-system/
 
 ## Testing
 
-- Unit tests per service: `pytest`
+Unit tests per service (each service has its own `pytest.ini`):
+
+```bash
+cd services/access-control-service && pytest   # fingerprint approval/scan/enrollment logic
+cd services/hardware-service && pytest         # sensor driver against a fake AS608
+```
+
+Dashboard checks:
+
+```bash
+cd apps/dashboard && npm run lint && npm run build
+```
 
 ## Next steps (typical)
 

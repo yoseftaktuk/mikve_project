@@ -28,6 +28,25 @@ class SimulateCashResponse(BaseModel):
     remaining_cents: int = 0
 
 
+class FingerprintApprovalRequest(BaseModel):
+    approval_id: str = Field(min_length=8, max_length=64)
+
+
+class FingerprintEnrollRequest(BaseModel):
+    holder_name: str = Field(min_length=2, max_length=80)
+    initial_amount_cents: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class FingerprintEnrollCancelRequest(BaseModel):
+    session_id: str = Field(min_length=4, max_length=64)
+
+
+class FingerprintEnrollStartResponse(BaseModel):
+    session_id: str
+    holder_name: str
+    initial_amount_cents: int
+
+
 class AccessLogResponse(BaseModel):
     id: int
     chip_id: uuid.UUID | None

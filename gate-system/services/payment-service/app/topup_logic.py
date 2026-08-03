@@ -1,0 +1,510 @@
+from __future__ import annotations
+
+import json
+import logging
+import secrets
+import time
+import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from gate_shared.errors import AppError
+
+from .clients import ChipClient
+from .models import (
+    STATUS_ABANDONED,
+    STATUS_CREDITING,
+    STATUS_FAILED,
+    STATUS_PAID,
+    STATUS_PENDING,
+    CardTopup,
+    NedarimCallback,
+)
+from .nedarim_plus import (
+    CreateTransactionCommand,
+    NedarimError,
+    NedarimPlusClient,
+    assert_callback_source_ip,
+    verify_callback,
+)
+from .settings import settings
+
+logger = logging.getLogger(__name__)
+
+PublishFn = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class CreatedCardTopup:
+    """Result of opening a card top-up that the kiosk can clear in the iframe."""
+
+    topup_id: uuid.UUID
+    nedarim_transaction_id: str
+    iframe_url: str
+    amount_cents: int
+    chip_uid: str
+    chip_id: uuid.UUID
+
+
+def _require_allowed_amount(amount_cents: int) -> None:
+    allowed = settings.topup_amount_options_cents
+    if amount_cents not in allowed:
+        raise AppError(
+            code="invalid_amount",
+            message=f"Amount must be one of {list(allowed)} agorot",
+            http_status=400,
+            details={"allowed_amounts_cents": list(allowed)},
+        )
+
+
+def _callback_url(topup_id: uuid.UUID) -> str:
+    base = settings.public_base_url.rstrip("/")
+    if not base:
+        raise AppError(
+            code="public_base_url_missing",
+            message="PUBLIC_BASE_URL is not set; Nedarim cannot deliver the callback",
+            http_status=503,
+        )
+    # [ID] is replaced by Nedarim with the transaction id (docs v=93).
+    return f"{base}/api/payments/nedarim/callback/{topup_id}?nid=[ID]"
+
+
+def _new_ajax_id() -> str:
+    # Docs recommend a unique value such as a millisecond timestamp (v=93).
+    return f"{int(time.time() * 1000)}{secrets.token_hex(3)}"
+
+
+async def create_card_topup(
+    *,
+    chip_uid: str,
+    amount_cents: int,
+    db: AsyncSession,
+    chip_client: ChipClient,
+    nedarim_client: NedarimPlusClient,
+) -> CreatedCardTopup:
+    """Resolve the chip, open a pending top-up, and create the Nedarim transaction.
+
+    The amount is fixed on this server before the iframe is shown, so the kiosk
+    cannot alter what the cardholder is charged.
+    """
+    _require_allowed_amount(amount_cents)
+    # Fail early if the tunnel hostname is missing — before we touch the DB or Nedarim.
+    if not settings.public_base_url.strip():
+        raise AppError(
+            code="public_base_url_missing",
+            message="PUBLIC_BASE_URL is not set; Nedarim cannot deliver the callback",
+            http_status=503,
+        )
+
+    uid = chip_uid.strip()
+    if not uid:
+        raise AppError(code="invalid_chip_uid", message="chip_uid is required", http_status=400)
+
+    try:
+        chip = await chip_client.validate(uid)
+    except ValueError:
+        raise AppError(code="chip_not_found", message="Chip not found", http_status=404) from None
+
+    if not chip.is_enabled:
+        raise AppError(code="chip_disabled", message="Chip is disabled", http_status=409)
+
+    topup = CardTopup(
+        id=uuid.uuid4(),
+        chip_id=uuid.UUID(chip.chip_id),
+        chip_uid=chip.uid,
+        amount_cents=amount_cents,
+        status=STATUS_PENDING,
+        ajax_id=_new_ajax_id(),
+    )
+    db.add(topup)
+    await db.flush()
+
+    command = CreateTransactionCommand(
+        amount_cents=amount_cents,
+        callback_url=_callback_url(topup.id),
+        ajax_id=topup.ajax_id,
+        param1=str(topup.id),
+        comment=f"gate top-up {chip.uid}",
+        groupe=settings.nedarim_groupe,
+    )
+
+    try:
+        result = await nedarim_client.create_transaction(command)
+    except NedarimError as exc:
+        topup.status = STATUS_FAILED
+        topup.error_code = exc.code
+        await db.commit()
+        logger.warning(
+            "card_topup_create_failed topup_id=%s code=%s message=%s",
+            topup.id,
+            exc.code,
+            exc.message,
+        )
+        raise AppError(code=exc.code, message=exc.message, http_status=502) from None
+
+    topup.nedarim_created_id = result.transaction_id
+    await db.commit()
+    await db.refresh(topup)
+
+    logger.info(
+        "card_topup_created topup_id=%s chip_uid=%s amount_cents=%s nedarim_id=%s",
+        topup.id,
+        topup.chip_uid,
+        topup.amount_cents,
+        topup.nedarim_created_id,
+    )
+    return CreatedCardTopup(
+        topup_id=topup.id,
+        nedarim_transaction_id=result.transaction_id,
+        iframe_url=settings.nedarim_iframe_url,
+        amount_cents=topup.amount_cents,
+        chip_uid=topup.chip_uid,
+        chip_id=topup.chip_id,
+    )
+
+
+async def get_card_topup(topup_id: uuid.UUID, db: AsyncSession) -> CardTopup:
+    """Return a top-up row or raise 404."""
+    topup = await db.get(CardTopup, topup_id)
+    if topup is None:
+        raise AppError(code="topup_not_found", message="Top-up not found", http_status=404)
+    return topup
+
+
+async def abandon_card_topup(topup_id: uuid.UUID, db: AsyncSession) -> CardTopup:
+    """Mark a still-pending top-up as abandoned when the user cancels."""
+    topup = await get_card_topup(topup_id, db)
+    if topup.status != STATUS_PENDING:
+        raise AppError(
+            code="topup_not_pending",
+            message=f"Top-up cannot be abandoned from status {topup.status}",
+            http_status=409,
+        )
+    topup.status = STATUS_ABANDONED
+    await db.commit()
+    await db.refresh(topup)
+    logger.info("card_topup_abandoned topup_id=%s", topup.id)
+    return topup
+
+
+@dataclass(frozen=True)
+class CallbackHandlingResult:
+    """Outcome of a Nedarim CallBack, for the HTTP layer to translate to a status code."""
+
+    accepted: bool
+    http_status: int
+    code: str
+    message: str
+
+
+async def _write_callback_audit(
+    db: AsyncSession,
+    *,
+    topup_id: uuid.UUID | None,
+    source_ip: str | None,
+    accepted: bool,
+    rejection_reason: str | None,
+    payload: dict[str, Any],
+) -> None:
+    db.add(
+        NedarimCallback(
+            topup_id=topup_id,
+            source_ip=source_ip,
+            accepted=accepted,
+            rejection_reason=rejection_reason,
+            payload_json=json.dumps(payload, ensure_ascii=False, default=str),
+        )
+    )
+    await db.commit()
+
+
+async def claim_pending_topup(db: AsyncSession, topup_id: uuid.UUID) -> CardTopup | None:
+    """Atomically move pending → crediting. Returns None if another worker won."""
+    result = await db.execute(
+        update(CardTopup)
+        .where(CardTopup.id == topup_id, CardTopup.status == STATUS_PENDING)
+        .values(status=STATUS_CREDITING)
+    )
+    await db.commit()
+    if result.rowcount != 1:
+        return None
+    return await db.get(CardTopup, topup_id)
+
+
+async def _credit_and_settle(
+    topup: CardTopup,
+    *,
+    db: AsyncSession,
+    chip_client: ChipClient,
+    transaction_id: str,
+    confirmation: str | None,
+    last_num: str | None,
+    publish: PublishFn | None,
+) -> int:
+    """Credit the chip (idempotent) and mark the top-up paid."""
+    balance_after = await chip_client.adjust_balance(
+        chip_id=str(topup.chip_id),
+        delta_cents=topup.amount_cents,
+        reason="card_topup",
+        description=f"Nedarim Plus top-up {transaction_id}",
+        idempotency_key=f"nedarim:{transaction_id}",
+    )
+    topup.status = STATUS_PAID
+    topup.nedarim_transaction_id = transaction_id
+    topup.confirmation = confirmation
+    topup.last_num = last_num
+    topup.balance_after_cents = balance_after
+    topup.credited_at = datetime.now(timezone.utc)
+    topup.error_code = None
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        # Another row already claimed this Nedarim transaction id.
+        existing = await db.get(CardTopup, topup.id)
+        if existing is not None and existing.status == STATUS_PAID:
+            return int(existing.balance_after_cents or balance_after)
+        raise AppError(
+            code="duplicate_transaction",
+            message="This Nedarim transaction was already credited",
+            http_status=409,
+        ) from None
+
+    if publish is not None:
+        await publish(
+            {
+                "type": "card_topup.paid",
+                "topup_id": str(topup.id),
+                "chip_id": str(topup.chip_id),
+                "chip_uid": topup.chip_uid,
+                "amount_cents": topup.amount_cents,
+                "balance_after_cents": balance_after,
+                "nedarim_transaction_id": transaction_id,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    return balance_after
+
+
+async def process_nedarim_callback(
+    *,
+    topup_id: uuid.UUID,
+    payload: dict[str, Any],
+    source_ip: str | None,
+    db: AsyncSession,
+    chip_client: ChipClient,
+    publish: PublishFn | None = None,
+) -> CallbackHandlingResult:
+    """Verify a CallBack and credit the balance. Safe to call more than once.
+
+    Documentation (v=95): IP allowlist, known unused correlation id, amount match.
+    Crediting happens only after a successful pending → crediting claim.
+    """
+    # IP first — even unknown top-up ids must not skip the allowlist.
+    try:
+        assert_callback_source_ip(source_ip)
+    except NedarimError as exc:
+        await _write_callback_audit(
+            db,
+            topup_id=None,
+            source_ip=source_ip,
+            accepted=False,
+            rejection_reason=exc.code,
+            payload=payload,
+        )
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=403,
+            code=exc.code,
+            message=exc.message,
+        )
+
+    topup = await db.get(CardTopup, topup_id)
+    if topup is None:
+        await _write_callback_audit(
+            db,
+            topup_id=None,
+            source_ip=source_ip,
+            accepted=False,
+            rejection_reason="unknown_topup",
+            payload=payload,
+        )
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=404,
+            code="unknown_topup",
+            message="Top-up not found",
+        )
+
+    try:
+        parsed = verify_callback(
+            payload=payload,
+            source_ip=source_ip,
+            expected_amount_cents=topup.amount_cents,
+            expected_topup_id=str(topup.id),
+        )
+    except NedarimError as exc:
+        await _write_callback_audit(
+            db,
+            topup_id=topup.id,
+            source_ip=source_ip,
+            accepted=False,
+            rejection_reason=exc.code,
+            payload=payload,
+        )
+        http_status = 403 if exc.code == "bad_ip" else 400
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=http_status,
+            code=exc.code,
+            message=exc.message,
+        )
+
+    if topup.nedarim_created_id and parsed.transaction_id != topup.nedarim_created_id:
+        await _write_callback_audit(
+            db,
+            topup_id=topup.id,
+            source_ip=source_ip,
+            accepted=False,
+            rejection_reason="id_mismatch",
+            payload=payload,
+        )
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=400,
+            code="id_mismatch",
+            message="Callback transaction id does not match the created transaction",
+        )
+
+    if topup.status == STATUS_PAID:
+        await _write_callback_audit(
+            db,
+            topup_id=topup.id,
+            source_ip=source_ip,
+            accepted=True,
+            rejection_reason="already_paid",
+            payload=payload,
+        )
+        return CallbackHandlingResult(
+            accepted=True,
+            http_status=200,
+            code="already_paid",
+            message="Top-up already credited",
+        )
+
+    if topup.status in (STATUS_ABANDONED, STATUS_FAILED):
+        await _write_callback_audit(
+            db,
+            topup_id=topup.id,
+            source_ip=source_ip,
+            accepted=False,
+            rejection_reason="not_pending",
+            payload=payload,
+        )
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=409,
+            code="not_pending",
+            message=f"Top-up is {topup.status}",
+        )
+
+    if topup.status == STATUS_CREDITING:
+        # Previous attempt died after the claim — retry credit using the
+        # idempotency key so the balance cannot be applied twice.
+        claimed = topup
+    else:
+        claimed = await claim_pending_topup(db, topup.id)
+        if claimed is None:
+            # Lost the race; reload and treat paid as success.
+            current = await db.get(CardTopup, topup.id)
+            if current is not None and current.status == STATUS_PAID:
+                await _write_callback_audit(
+                    db,
+                    topup_id=topup.id,
+                    source_ip=source_ip,
+                    accepted=True,
+                    rejection_reason="already_paid",
+                    payload=payload,
+                )
+                return CallbackHandlingResult(
+                    accepted=True,
+                    http_status=200,
+                    code="already_paid",
+                    message="Top-up already credited",
+                )
+            await _write_callback_audit(
+                db,
+                topup_id=topup.id,
+                source_ip=source_ip,
+                accepted=False,
+                rejection_reason="claim_failed",
+                payload=payload,
+            )
+            return CallbackHandlingResult(
+                accepted=False,
+                http_status=409,
+                code="claim_failed",
+                message="Could not claim top-up for crediting",
+            )
+
+    try:
+        balance_after = await _credit_and_settle(
+            claimed,
+            db=db,
+            chip_client=chip_client,
+            transaction_id=parsed.transaction_id,
+            confirmation=parsed.confirmation,
+            last_num=parsed.last_num,
+            publish=publish,
+        )
+    except Exception:
+        logger.exception(
+            "card_topup_credit_failed topup_id=%s nedarim_id=%s",
+            topup.id,
+            parsed.transaction_id,
+        )
+        claimed.error_code = "chip_credit_failed"
+        await db.commit()
+        await _write_callback_audit(
+            db,
+            topup_id=topup.id,
+            source_ip=source_ip,
+            accepted=False,
+            rejection_reason="chip_credit_failed",
+            payload=payload,
+        )
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=500,
+            code="chip_credit_failed",
+            message="Payment received but balance credit failed; staff must repair",
+        )
+
+    await _write_callback_audit(
+        db,
+        topup_id=topup.id,
+        source_ip=source_ip,
+        accepted=True,
+        rejection_reason=None,
+        payload=payload,
+    )
+    logger.info(
+        "card_topup_paid topup_id=%s chip_uid=%s amount_cents=%s balance_after=%s nedarim_id=%s",
+        topup.id,
+        topup.chip_uid,
+        topup.amount_cents,
+        balance_after,
+        parsed.transaction_id,
+    )
+    return CallbackHandlingResult(
+        accepted=True,
+        http_status=200,
+        code="ok",
+        message="Top-up credited",
+    )

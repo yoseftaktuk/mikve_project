@@ -1,0 +1,140 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1001;
+  animation: fadeIn 0.2s ease;
+}
+
+.dialog {
+  width: min(100%, 480px);
+  max-height: min(92dvh, 900px);
+  overflow: auto;
+  padding: 28px 24px;
+  border-radius: 24px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  text-align: center;
+  animation: slideUp 0.3s ease;
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+  color: var(--text-h);
+}
+
+.subtitle {
+  margin: 0 0 20px;
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+}
+
+.presets {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.presetButton {
+  min-height: var(--touch-min);
+  padding: 14px 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: 1.2rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.presetButton:hover {
+  border-color: #2563eb;
+}
+
+.frameWrap {
+  width: 100%;
+  margin: 0 0 16px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.frame {
+  display: block;
+  width: 100%;
+  border: none;
+}
+
+.actions {
+  display: grid;
+  gap: 10px;
+}
+
+.payButton,
+.cancelButton {
+  min-height: var(--touch-min);
+  padding: 14px 24px;
+  border-radius: 12px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.payButton {
+  border: none;
+  background: #16a34a;
+  color: #fff;
+}
+
+.payButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancelButton {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.status {
+  margin: 0 0 12px;
+  font-size: var(--text-fluid-base);
+  color: var(--text-h);
+}
+
+.error {
+  margin: 0 0 12px;
+  font-size: var(--text-fluid-sm);
+  color: #ef4444;
+}
+
+.success {
+  margin: 0 0 16px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #16a34a;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

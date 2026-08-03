@@ -17,7 +17,8 @@ class Chip(Base):
     __table_args__ = {"schema": settings.postgres_schema}
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    uid: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)  # RFID/NFC UID
+    uid: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)  # RFID/NFC UID, or FP-<slot>
+    holder_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -41,5 +42,7 @@ class ChipActivity(Base):
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)  # scan, recharge, debit, disable, enable
     delta_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Optional caller-supplied key. Unique so a retried adjust never double-applies.
+    idempotency_key: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

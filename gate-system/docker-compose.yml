@@ -66,6 +66,8 @@ services:
     env_file:
       - ./services/payment-service/.env
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped

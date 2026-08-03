@@ -15,6 +15,11 @@ from .access_logic import CashSession, process_cash_inserted, process_chip_acces
 from .clients import ChipClient, HardwareClient
 from .db import engine, get_db
 from .dev_helpers import DEMO_CHIP_UID, ensure_demo_chip
+from .fingerprint_logic import (
+    PendingApprovalStore,
+    PendingEnrollmentStore,
+    approve_pending,
+)
 from .hardware_consumer import HardwareEventConsumer
 from .models import AccessLog, Base, HardwareEvent
 from .realtime import PubSubFanout
@@ -22,6 +27,10 @@ from .schemas import (
     AccessAttemptRequest,
     AccessDecisionResponse,
     AccessLogResponse,
+    FingerprintApprovalRequest,
+    FingerprintEnrollCancelRequest,
+    FingerprintEnrollRequest,
+    FingerprintEnrollStartResponse,
     SimulateCashRequest,
     SimulateCashResponse,
 )
@@ -52,6 +61,8 @@ app = FastAPI(
 chip_client = ChipClient()
 hardware_client = HardwareClient()
 cash_session = CashSession(timeout_seconds=settings.cash_session_timeout_seconds)
+approvals = PendingApprovalStore(timeout_seconds=settings.fingerprint_approval_timeout_seconds)
+enrollments = PendingEnrollmentStore()
 fanout = PubSubFanout(settings.redis_url)
 hardware_consumer: HardwareEventConsumer | None = None
 redis_client: redis.Redis | None = None
@@ -66,6 +77,7 @@ async def startup() -> None:
         await conn.run_sync(Base.metadata.create_all)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     cash_session.set_publish(_publish)
+    approvals.set_publish(_publish)
     await fanout.start()
     hardware_consumer = HardwareEventConsumer(
         settings.redis_url,
@@ -73,6 +85,8 @@ async def startup() -> None:
         hardware_client=hardware_client,
         cash_session=cash_session,
         publish=_publish,
+        approvals=approvals,
+        enrollments=enrollments,
     )
     await hardware_consumer.start()
     logger.info(
@@ -88,6 +102,8 @@ async def shutdown() -> None:
     """Stop consumers and close Redis on service shutdown."""
     global redis_client, hardware_consumer
     await cash_session.shutdown()
+    await approvals.shutdown()
+    enrollments.clear()
     if hardware_consumer is not None:
         await hardware_consumer.stop()
         hardware_consumer = None
@@ -144,6 +160,33 @@ async def access_logs(db: AsyncSession = Depends(get_db), limit: int = 50):
     limit = max(1, min(limit, 200))
     rows = (await db.execute(select(AccessLog).order_by(AccessLog.id.desc()).limit(limit))).scalars().all()
     return [AccessLogResponse.model_validate(r, from_attributes=True) for r in rows]
+
+
+@app.post("/fingerprint/approve", response_model=AccessDecisionResponse)
+async def fingerprint_approve(req: FingerprintApprovalRequest, db: AsyncSession = Depends(get_db)):
+    """Confirm a scanned fingerprint: charge the fee and open the door."""
+    try:
+        return await approve_pending(
+            req.approval_id,
+            db,
+            chip_client=chip_client,
+            hardware_client=hardware_client,
+            publish=_publish,
+            approvals=approvals,
+        )
+    except ValueError as exc:
+        raise AppError(
+            code=str(exc),
+            message="This approval is no longer available",
+            http_status=status.HTTP_409_CONFLICT,
+        ) from None
+
+
+@app.post("/fingerprint/cancel", status_code=status.HTTP_204_NO_CONTENT)
+async def fingerprint_cancel(req: FingerprintApprovalRequest):
+    """Dismiss a pending fingerprint approval without charging."""
+    await approvals.clear(req.approval_id, reason="cancelled")
+    return None
 
 
 @app.post("/dev/simulate/chip", response_model=AccessDecisionResponse, include_in_schema=False)
@@ -218,6 +261,48 @@ async def management_chip_topup(req: ChipTopupRequest):
 async def management_door_open():
     """Manually open the door from the management panel."""
     await management_open_door(hardware_client)
+    return None
+
+
+@app.post(
+    "/management/fingerprint/enroll",
+    response_model=FingerprintEnrollStartResponse,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_fingerprint_enroll(req: FingerprintEnrollRequest):
+    """Start enrolling a finger for a named holder with an optional initial balance."""
+    session = enrollments.create(
+        holder_name=req.holder_name.strip(),
+        initial_amount_cents=req.initial_amount_cents,
+    )
+    try:
+        await hardware_client.enroll_fingerprint(session.session_id)
+    except Exception:
+        enrollments.discard(session.session_id)
+        logger.exception("fingerprint_enroll_start_failed session_id=%s", session.session_id)
+        raise AppError(
+            code="fingerprint_reader_unavailable",
+            message="Could not start the fingerprint reader",
+            http_status=status.HTTP_502_BAD_GATEWAY,
+        ) from None
+    return FingerprintEnrollStartResponse(
+        session_id=session.session_id,
+        holder_name=session.holder_name,
+        initial_amount_cents=session.initial_amount_cents,
+    )
+
+
+@app.post(
+    "/management/fingerprint/enroll/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_fingerprint_enroll_cancel(req: FingerprintEnrollCancelRequest):
+    """Abort a running enrollment and forget its pending details."""
+    enrollments.discard(req.session_id)
+    await hardware_client.cancel_enroll()
     return None
 
 

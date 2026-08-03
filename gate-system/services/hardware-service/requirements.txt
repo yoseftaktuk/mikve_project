@@ -4,6 +4,8 @@ pydantic>=2.7
 pydantic-settings>=2.2
 redis>=5.0
 pyserial>=3.5
+# AS608/R307 fingerprint sensor (pure Python on top of pyserial).
+pyfingerprint>=1.5
 # rpi-lgpio provides an RPi.GPIO-compatible API (works on Pi 4/5 + Docker).
 rpi-lgpio>=0.6; platform_machine == "armv7l" or platform_machine == "aarch64"
 pytest>=8.2

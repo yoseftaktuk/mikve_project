@@ -1,6 +1,11 @@
 import axios from 'axios'
 import { API_BASE } from './config'
 import type { ChargeChipRequest, ChargeChipResponse } from '../types/chargeChip'
+import type {
+  CardTopupCreateResponse,
+  CardTopupStatusResponse,
+  PaymentHealthResponse,
+} from '../types/topup'
 
 /** Axios client for payment-service requests. */
 export const paymentsApi = axios.create({
@@ -8,22 +13,53 @@ export const paymentsApi = axios.create({
   timeout: 30_000,
 })
 
-/** Charge a chip balance through the payment service. */
+/** Charge a chip balance through the legacy stub (does not credit balance). */
 export async function chargeChip(body: ChargeChipRequest): Promise<ChargeChipResponse> {
   const res = await paymentsApi.post<ChargeChipResponse>('/payments/charge-chip', body)
+  return res.data
+}
+
+/** Open a server-side Nedarim transaction for a chip top-up. */
+export async function createCardTopup(body: {
+  chip_uid: string
+  amount_cents: number
+}): Promise<CardTopupCreateResponse> {
+  const res = await paymentsApi.post<CardTopupCreateResponse>('/payments/card-topups', body)
+  return res.data
+}
+
+/** Poll server-confirmed top-up status (the only source of truth after payment). */
+export async function getCardTopupStatus(topupId: string): Promise<CardTopupStatusResponse> {
+  const res = await paymentsApi.get<CardTopupStatusResponse>(`/payments/card-topups/${topupId}`)
+  return res.data
+}
+
+/** Mark a still-pending top-up abandoned when the user cancels. */
+export async function abandonCardTopup(topupId: string): Promise<CardTopupStatusResponse> {
+  const res = await paymentsApi.post<CardTopupStatusResponse>(
+    `/payments/card-topups/${topupId}/abandon`,
+  )
+  return res.data
+}
+
+/** Preset amounts and Nedarim readiness from payment-service. */
+export async function getPaymentHealth(): Promise<PaymentHealthResponse> {
+  const res = await paymentsApi.get<PaymentHealthResponse>('/payments/healthz')
   return res.data
 }
 
 /** Extract a user-facing error message from an Axios/API failure. */
 export function extractApiErrorMessage(error: unknown): string {
   if (!axios.isAxiosError(error)) {
-    return 'Payment failed. Please try again.'
+    return 'התשלום נכשל. נסה שוב.'
   }
-  const data = error.response?.data as { message?: string; detail?: string | { msg: string }[] } | undefined
+  const data = error.response?.data as
+    | { message?: string; code?: string; detail?: string | { msg: string }[] }
+    | undefined
   if (data?.message) return data.message
   if (typeof data?.detail === 'string') return data.detail
   if (Array.isArray(data?.detail) && data.detail[0]?.msg) {
     return data.detail[0].msg
   }
-  return 'Payment failed. Please try again.'
+  return 'התשלום נכשל. נסה שוב.'
 }

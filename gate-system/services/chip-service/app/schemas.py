@@ -6,15 +6,21 @@ from pydantic import BaseModel, Field
 
 class ChipCreateRequest(BaseModel):
     uid: str = Field(min_length=4, max_length=64)
+    holder_name: str | None = Field(default=None, max_length=80)
 
 
 class ChipAssignRequest(BaseModel):
     user_id: uuid.UUID | None = None
 
 
+class ChipRenameRequest(BaseModel):
+    holder_name: str | None = Field(default=None, max_length=80)
+
+
 class ChipResponse(BaseModel):
     id: uuid.UUID
     uid: str
+    holder_name: str | None
     is_enabled: bool
     assigned_user_id: uuid.UUID | None
     created_at: datetime
@@ -30,6 +36,9 @@ class AdjustBalanceRequest(BaseModel):
     delta_cents: int = Field(ge=-1_000_000_000, le=1_000_000_000)
     description: str | None = Field(default=None, max_length=255)
     reason: str = Field(default="adjustment", max_length=40)
+    # When set, a second call with the same key returns the current balance
+    # without applying the delta again.
+    idempotency_key: str | None = Field(default=None, max_length=80)
 
 
 class ValidateChipRequest(BaseModel):
@@ -39,6 +48,7 @@ class ValidateChipRequest(BaseModel):
 class ValidateChipResponse(BaseModel):
     chip_id: uuid.UUID
     uid: str
+    holder_name: str | None = None
     is_enabled: bool
     assigned_user_id: uuid.UUID | None
     balance_cents: int
@@ -50,5 +60,6 @@ class ChipActivityResponse(BaseModel):
     event_type: str
     delta_cents: int
     description: str | None
+    idempotency_key: str | None = None
     created_at: datetime
 

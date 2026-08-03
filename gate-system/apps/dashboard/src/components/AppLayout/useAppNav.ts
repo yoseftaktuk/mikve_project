@@ -11,6 +11,7 @@ export type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { to: '/dashboard', label: 'מסך כניסה', shortLabel: 'כניסה', icon: '🚪' },
   { to: '/charge-chip', label: "טעינת צ'יפ", shortLabel: 'טעינה', icon: '💳' },
+  { to: '/fingerprint-enroll', label: 'רישום אצבע', shortLabel: 'אצבע', icon: '🫆' },
   { to: '/management', label: 'ניהול', shortLabel: 'ניהול', icon: '⚙️' },
 ]
 
@@ -21,6 +22,7 @@ export function useAppNav() {
   const activePath = useMemo(() => {
     if (pathname.startsWith('/management') || pathname.startsWith('/admin')) return '/management'
     if (pathname.startsWith('/charge-chip')) return '/charge-chip'
+    if (pathname.startsWith('/fingerprint-enroll')) return '/fingerprint-enroll'
     return '/dashboard'
   }, [pathname])
 

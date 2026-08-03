@@ -1,7 +1,10 @@
 import { usePageMeta } from '../../../app/pageMeta'
+import { AccessApprovalDialog } from '../../../components/AccessApprovalDialog'
+import { CardTopupDialog } from '../../../components/CardTopupDialog'
 import { ChipToast } from '../../../components/ChipToast'
 import { GateEntrancePanel } from '../../../components/GateEntrancePanel'
 import { PageShell } from '../../../components/PageShell'
+import { TopupChoiceDialog } from '../../../components/TopupChoiceDialog'
 import styles from './DashboardPage.module.css'
 import { useDashboardPage } from './useDashboardPage'
 
@@ -21,15 +24,58 @@ export function DashboardPage() {
     simError,
     simLoading,
     cashProgress,
+    pendingApproval,
+    approvalSubmitting,
+    approvalError,
+    topupOffer,
+    cardTopupOpen,
     dismissChipToast,
     simulateChip,
     simulateCash,
+    approvePending,
+    cancelPending,
+    dismissTopupOffer,
+    chooseCoinsTopup,
+    chooseCardTopup,
+    onCardTopupPaid,
     formatMoney,
   } = useDashboardPage()
 
+  const blockingDialog = Boolean(pendingApproval || topupOffer)
+
   return (
     <>
-      {chipToast && (
+      {pendingApproval && (
+        <AccessApprovalDialog
+          approval={pendingApproval}
+          formatMoney={formatMoney}
+          submitting={approvalSubmitting}
+          error={approvalError}
+          onApprove={() => void approvePending()}
+          onCancel={() => void cancelPending()}
+        />
+      )}
+
+      {topupOffer && !cardTopupOpen && (
+        <TopupChoiceDialog
+          offer={topupOffer}
+          formatMoney={formatMoney}
+          onCoins={chooseCoinsTopup}
+          onCreditCard={chooseCardTopup}
+          onCancel={dismissTopupOffer}
+        />
+      )}
+
+      {topupOffer && cardTopupOpen && (
+        <CardTopupDialog
+          chipUid={topupOffer.uid}
+          formatMoney={formatMoney}
+          onClose={dismissTopupOffer}
+          onPaid={onCardTopupPaid}
+        />
+      )}
+
+      {!blockingDialog && chipToast && (
         <ChipToast toast={chipToast} formatMoney={formatMoney} onDismiss={dismissChipToast} />
       )}
 

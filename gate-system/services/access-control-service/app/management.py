@@ -38,6 +38,7 @@ class ChipInfoResponse(BaseModel):
     chip_id: str
     balance_cents: int
     is_enabled: bool
+    holder_name: str | None = None
 
 
 def _purge_expired_tokens() -> None:
@@ -92,6 +93,7 @@ async def get_chip_info(uid: str, chip_client: ChipClient) -> ChipInfoResponse:
         chip_id=chip.chip_id,
         balance_cents=chip.balance_cents,
         is_enabled=chip.is_enabled,
+        holder_name=chip.holder_name,
     )
 
 

@@ -1,0 +1,133 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+.dialog {
+  width: min(100%, 400px);
+  padding: 32px 28px;
+  border-radius: 24px;
+  background: var(--bg);
+  border: 1px solid var(--accent-border, #2563eb);
+  box-shadow: var(--shadow);
+  text-align: center;
+  animation: slideUp 0.3s ease;
+}
+
+.icon {
+  font-size: 3rem;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.name {
+  margin: 0 0 4px;
+  font-size: 1.75rem;
+  color: var(--text-h);
+}
+
+.subtitle {
+  margin: 0 0 20px;
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+}
+
+.amounts {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 20px;
+  text-align: start;
+}
+
+.amountRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-fluid-base);
+  color: var(--text);
+}
+
+.amountRow b {
+  color: var(--text-h);
+}
+
+.fee {
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--text-h);
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+
+.countdown {
+  margin: 0 0 20px;
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+}
+
+.countdownUrgent {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.actions {
+  display: grid;
+  gap: 10px;
+}
+
+.confirmButton {
+  min-height: var(--touch-min);
+  padding: 14px 24px;
+  border: none;
+  border-radius: 12px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.confirmButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancelButton {
+  min-height: var(--touch-min);
+  padding: 12px 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.error {
+  margin: 12px 0 0;
+  font-size: var(--text-fluid-sm);
+  color: #ef4444;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

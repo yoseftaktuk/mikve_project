@@ -1,63 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import threading
 import time
-import urllib.request
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-# #region agent log
-_DEBUG_LOG_PATH = "/Users/natankatz/mikve_project/.cursor/debug-359384.log"
-_DEBUG_INGEST = "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358"
-_DEBUG_INGEST_LAN = os.environ.get(
-    "DEBUG_INGEST_URL",
-    "http://192.168.150.196:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-)
-
-
-def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    """Session debug probe: file + HTTP ingest + logger (Pi-safe)."""
-    payload = {
-        "sessionId": "359384",
-        "runId": "coin-pre",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    line = json.dumps(payload, ensure_ascii=True)
-    try:
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
-    body = line.encode("utf-8")
-    for url in (_DEBUG_INGEST, _DEBUG_INGEST_LAN):
-        try:
-            req = urllib.request.Request(
-                url,
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Debug-Session-Id": "359384",
-                },
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=0.4).read()
-        except Exception:
-            pass
-    logger.warning("AGENT_DEBUG %s", line)
-
-
-# #endregion
 
 try:
     import RPi.GPIO as GPIO  # type: ignore[import-untyped]
@@ -219,25 +170,6 @@ class RpiGpioController:
 
         GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
         self._gpio_ready = True
-        # #region agent log
-        try:
-            coin_level = int(GPIO.input(self._coin_pin))
-        except Exception as exc:
-            coin_level = f"err:{type(exc).__name__}"
-        _agent_dbg(
-            "E",
-            "rpi_gpio.py:start",
-            "gpio_started",
-            {
-                "coin_pin": self._coin_pin,
-                "door_pin": self._door_pin,
-                "gpio_ready": True,
-                "coin_level": coin_level,
-                "edge": "FALLING",
-                "bouncetime_ms": 5,
-            },
-        )
-        # #endregion
         logger.info(
             "gpio_started coin_pin=%s door_pin=%s door_idle=%s unlock_mode=float",
             self._coin_pin,
@@ -291,16 +223,6 @@ class RpiGpioController:
         with self._coin_lock:
             self._coin_count += 1
             self._last_pulse_time = datetime.now()
-            count = self._coin_count
-        # #region agent log
-        if count <= 3 or count % 5 == 0:
-            _agent_dbg(
-                "A",
-                "rpi_gpio.py:_pulse_detected",
-                "pulse_edge",
-                {"channel": _channel, "coin_count": count, "coin_pin": self._coin_pin},
-            )
-        # #endregion
 
     def _get_coin_if_ready(self) -> float | None:
         """Return shekel value once pulse bursts settle (~200ms quiet)."""
@@ -317,19 +239,6 @@ class RpiGpioController:
             self._last_pulse_time = None
 
         shekels = pulses_to_shekels(pulses)
-        # #region agent log
-        _agent_dbg(
-            "B",
-            "rpi_gpio.py:_get_coin_if_ready",
-            "coin_settled",
-            {
-                "pulses": pulses,
-                "shekels": shekels,
-                "mapped": shekels is not None,
-                "settle_ms": 200,
-            },
-        )
-        # #endregion
         if shekels is None:
             return None
         logger.info("coin_detected pulses=%s shekels=%s", pulses, shekels)
@@ -337,41 +246,10 @@ class RpiGpioController:
 
     def _poll_loop(self) -> None:
         """Poll for completed coins and invoke the cash callback."""
-        ticks = 0
         while not self._stop.is_set():
             try:
-                ticks += 1
-                # #region agent log
-                if ticks == 1 or ticks % 200 == 0:
-                    level: Any = None
-                    try:
-                        if GPIO is not None and self._gpio_ready:
-                            level = int(GPIO.input(self._coin_pin))
-                    except Exception as exc:
-                        level = f"err:{type(exc).__name__}"
-                    _agent_dbg(
-                        "A",
-                        "rpi_gpio.py:_poll_loop",
-                        "coin_pin_sample",
-                        {
-                            "ticks": ticks,
-                            "coin_pin": self._coin_pin,
-                            "level": level,
-                            "pending_count": self._coin_count,
-                            "listener_alive": True,
-                        },
-                    )
-                # #endregion
                 shekels = self._get_coin_if_ready()
                 if shekels is not None:
-                    # #region agent log
-                    _agent_dbg(
-                        "C",
-                        "rpi_gpio.py:_poll_loop",
-                        "dispatch_cash_callback",
-                        {"shekels": shekels},
-                    )
-                    # #endregion
                     asyncio.run_coroutine_threadsafe(self._on_cash_shekels(shekels), self._loop)
             except Exception:
                 logger.exception("coin_poll_error")

@@ -1,0 +1,108 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+.dialog {
+  width: min(100%, 420px);
+  padding: 32px 28px;
+  border-radius: 24px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  text-align: center;
+  animation: slideUp 0.3s ease;
+}
+
+.name {
+  margin: 0 0 4px;
+  font-size: 1.75rem;
+  color: var(--text-h);
+}
+
+.subtitle {
+  margin: 0 0 20px;
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+}
+
+.amounts {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 24px;
+  text-align: start;
+}
+
+.amountRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-fluid-base);
+  color: var(--text);
+}
+
+.amountRow b {
+  color: var(--text-h);
+}
+
+.shortfall {
+  color: #dc2626;
+}
+
+.actions {
+  display: grid;
+  gap: 10px;
+}
+
+.primaryButton,
+.secondaryButton,
+.cancelButton {
+  min-height: var(--touch-min);
+  padding: 14px 24px;
+  border-radius: 12px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primaryButton {
+  border: none;
+  background: #2563eb;
+  color: #fff;
+}
+
+.secondaryButton {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.cancelButton {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

@@ -1,16 +1,37 @@
 import json
 import logging
+import uuid
+from typing import Any
 
 import redis.asyncio as redis
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from gate_shared.errors import AppError, ErrorResponse
 from gate_shared.logging import configure_logging
 
+from .client_ip import resolve_callback_source_ip
+from .clients import ChipClient
+from .db import engine, get_db
+from .models import STATUS_CREDITING, STATUS_PENDING, Base, CardTopup
+from .nedarim_plus import NedarimPlusClient
 from .provider import charge_credit_card
-from .schemas import ChargeChipRequest, ChargeChipResponse
+from .schemas import (
+    CardTopupCreateRequest,
+    CardTopupCreateResponse,
+    CardTopupStatusResponse,
+    ChargeChipRequest,
+    ChargeChipResponse,
+)
 from .settings import settings
+from .topup_logic import (
+    abandon_card_topup,
+    create_card_topup,
+    get_card_topup,
+    process_nedarim_callback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +44,27 @@ app = FastAPI(
 )
 
 redis_client: redis.Redis | None = None
+chip_client = ChipClient()
+nedarim_client = NedarimPlusClient()
 
 
 @app.on_event("startup")
 async def startup() -> None:
-    """Connect to Redis for payment event publishing."""
+    """Create tables and connect to Redis."""
     global redis_client
     configure_logging(settings.service_name, settings.log_level)
+    if not settings.postgres_dsn:
+        raise RuntimeError("POSTGRES_DSN is required for payment-service")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {settings.postgres_schema}")
+        await conn.run_sync(Base.metadata.create_all)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
-    logger.info("startup_complete")
+    logger.info(
+        "startup_complete nedarim_configured=%s public_base_url_set=%s topup_amounts=%s",
+        nedarim_client.is_configured,
+        bool(settings.public_base_url),
+        list(settings.topup_amount_options_cents),
+    )
 
 
 @app.on_event("shutdown")
@@ -53,13 +86,131 @@ async def app_error_handler(_, exc: AppError):
 
 
 @app.get("/healthz")
-async def healthz():
-    return {"status": "ok", "service": settings.service_name}
+async def healthz(db: AsyncSession = Depends(get_db)):
+    """Health plus stuck-row counts so staff can see mid-credit failures."""
+    pending = await db.scalar(
+        select(func.count()).select_from(CardTopup).where(CardTopup.status == STATUS_PENDING)
+    )
+    crediting = await db.scalar(
+        select(func.count()).select_from(CardTopup).where(CardTopup.status == STATUS_CREDITING)
+    )
+    return {
+        "status": "ok",
+        "service": settings.service_name,
+        "nedarim_configured": nedarim_client.is_configured,
+        "public_base_url_set": bool(settings.public_base_url),
+        "topup_amounts_cents": list(settings.topup_amount_options_cents),
+        "pending_topups": int(pending or 0),
+        "crediting_topups": int(crediting or 0),
+    }
+
+
+@app.post("/card-topups", response_model=CardTopupCreateResponse)
+async def card_topups_create(req: CardTopupCreateRequest, db: AsyncSession = Depends(get_db)):
+    """Open a pending card top-up and create the Nedarim transaction server-side."""
+    created = await create_card_topup(
+        chip_uid=req.chip_uid,
+        amount_cents=req.amount_cents,
+        db=db,
+        chip_client=chip_client,
+        nedarim_client=nedarim_client,
+    )
+    return CardTopupCreateResponse(
+        topup_id=created.topup_id,
+        nedarim_transaction_id=created.nedarim_transaction_id,
+        iframe_url=created.iframe_url,
+        amount_cents=created.amount_cents,
+        chip_uid=created.chip_uid,
+        chip_id=created.chip_id,
+    )
+
+
+@app.get("/card-topups/{topup_id}", response_model=CardTopupStatusResponse)
+async def card_topups_status(topup_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Return the server-confirmed status. The only thing the kiosk may trust."""
+    topup = await get_card_topup(topup_id, db)
+    return CardTopupStatusResponse(
+        topup_id=topup.id,
+        status=topup.status,
+        amount_cents=topup.amount_cents,
+        chip_uid=topup.chip_uid,
+        chip_id=topup.chip_id,
+        nedarim_transaction_id=topup.nedarim_created_id or topup.nedarim_transaction_id,
+        balance_after_cents=topup.balance_after_cents,
+        last_num=topup.last_num,
+        error_code=topup.error_code,
+    )
+
+
+@app.post("/card-topups/{topup_id}/abandon", response_model=CardTopupStatusResponse)
+async def card_topups_abandon(topup_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Mark a still-pending top-up abandoned when the user cancels."""
+    topup = await abandon_card_topup(topup_id, db)
+    return CardTopupStatusResponse(
+        topup_id=topup.id,
+        status=topup.status,
+        amount_cents=topup.amount_cents,
+        chip_uid=topup.chip_uid,
+        chip_id=topup.chip_id,
+        nedarim_transaction_id=topup.nedarim_created_id or topup.nedarim_transaction_id,
+        balance_after_cents=topup.balance_after_cents,
+        last_num=topup.last_num,
+        error_code=topup.error_code,
+    )
+
+
+async def _publish_payment_event(event: dict[str, Any]) -> None:
+    if redis_client is None:
+        return
+    await redis_client.publish("payment.events", json.dumps(event))
+
+
+@app.post("/nedarim/callback/{topup_id}")
+async def nedarim_callback(
+    topup_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Nedarim Plus server-to-server CallBack. Sole authority for crediting balance.
+
+    Sent once, never retried (docs v=95). Always audit; credit only after IP,
+    amount, and single-use claim checks pass.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "code": "bad_json", "message": "Body must be JSON"},
+        )
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "code": "bad_payload", "message": "Body must be a JSON object"},
+        )
+
+    source_ip = resolve_callback_source_ip(request)
+    result = await process_nedarim_callback(
+        topup_id=topup_id,
+        payload=payload,
+        source_ip=source_ip,
+        db=db,
+        chip_client=chip_client,
+        publish=_publish_payment_event,
+    )
+    return JSONResponse(
+        status_code=result.http_status,
+        content={
+            "status": "ok" if result.accepted else "error",
+            "code": result.code,
+            "message": result.message,
+        },
+    )
 
 
 @app.post("/charge-chip", response_model=ChargeChipResponse)
 async def charge_chip(req: ChargeChipRequest):
-    """Charge a credit card and publish a chip.charged payment event."""
+    """Legacy stub. Prefer POST /card-topups — this path does not credit a balance."""
     charge_credit_card(amount=req.amount)
     if redis_client is not None:
         await redis_client.publish(

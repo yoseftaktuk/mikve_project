@@ -18,6 +18,7 @@ from .schemas import (
     ChipActivityResponse,
     ChipAssignRequest,
     ChipCreateRequest,
+    ChipRenameRequest,
     ChipResponse,
     ValidateChipRequest,
     ValidateChipResponse,
@@ -44,6 +45,20 @@ async def startup() -> None:
     configure_logging(settings.service_name, settings.log_level)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # The project has no migration tool, so databases created before holder_name
+        # existed need this idempotent catch-up.
+        await conn.exec_driver_sql(
+            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.chips "
+            "ADD COLUMN IF NOT EXISTS holder_name varchar(80)"
+        )
+        await conn.exec_driver_sql(
+            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.chip_activity "
+            "ADD COLUMN IF NOT EXISTS idempotency_key varchar(80)"
+        )
+        await conn.exec_driver_sql(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS chip_activity_idempotency_key_key "
+            f"ON {settings.postgres_schema}.chip_activity (idempotency_key)"
+        )
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     logger.info("startup_complete")
 
@@ -84,14 +99,21 @@ async def create_chip(req: ChipCreateRequest, db: AsyncSession = Depends(get_db)
     existing = await db.scalar(select(Chip).where(Chip.uid == req.uid))
     if existing:
         raise AppError(code="chip_uid_taken", message="Chip UID already registered", http_status=400)
-    chip = Chip(uid=req.uid, is_enabled=True)
+    chip = Chip(uid=req.uid, holder_name=req.holder_name, is_enabled=True)
     db.add(chip)
     await db.flush()
     db.add(Balance(chip_id=chip.id, amount_cents=0))
     db.add(ChipActivity(chip_id=chip.id, event_type="register", delta_cents=0, description="chip registered"))
     await db.commit()
     await db.refresh(chip)
-    await _publish({"type": "chip.registered", "chip_id": str(chip.id), "uid": chip.uid})
+    await _publish(
+        {
+            "type": "chip.registered",
+            "chip_id": str(chip.id),
+            "uid": chip.uid,
+            "holder_name": chip.holder_name,
+        }
+    )
     return ChipResponse.model_validate(chip, from_attributes=True)
 
 
@@ -117,6 +139,27 @@ async def assign_chip(chip_id: str, req: ChipAssignRequest, db: AsyncSession = D
     return ChipResponse.model_validate(chip, from_attributes=True)
 
 
+@app.patch("/chips/{chip_id}/name", response_model=ChipResponse)
+async def rename_chip(chip_id: str, req: ChipRenameRequest, db: AsyncSession = Depends(get_db)):
+    """Set or clear the holder name shown on scans and management screens."""
+    chip = await db.get(Chip, chip_id)
+    if not chip:
+        raise HTTPException(status_code=404, detail="chip_not_found")
+    holder_name = req.holder_name.strip() if req.holder_name else None
+    chip.holder_name = holder_name or None
+    db.add(
+        ChipActivity(
+            chip_id=chip.id,
+            event_type="rename",
+            delta_cents=0,
+            description=f"holder_name={chip.holder_name or ''}",
+        )
+    )
+    await db.commit()
+    await db.refresh(chip)
+    return ChipResponse.model_validate(chip, from_attributes=True)
+
+
 @app.get("/chips/{chip_id}/balance", response_model=BalanceResponse)
 async def get_balance(chip_id: str, db: AsyncSession = Depends(get_db)):
     """Return the current balance for a chip."""
@@ -128,10 +171,21 @@ async def get_balance(chip_id: str, db: AsyncSession = Depends(get_db)):
 
 @app.post("/chips/{chip_id}/balance/adjust", response_model=BalanceResponse)
 async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSession = Depends(get_db)):
-    """Apply a positive or negative balance delta and record activity."""
+    """Apply a positive or negative balance delta and record activity.
+
+    When idempotency_key is set and already recorded, return the current balance
+    without applying the delta again (safe retries after a crash).
+    """
     bal = await db.get(Balance, chip_id)
     if not bal:
         raise HTTPException(status_code=404, detail="balance_not_found")
+
+    key = req.idempotency_key.strip() if req.idempotency_key else None
+    if key:
+        existing = await db.scalar(select(ChipActivity).where(ChipActivity.idempotency_key == key))
+        if existing is not None:
+            return BalanceResponse.model_validate(bal, from_attributes=True)
+
     new_amount = bal.amount_cents + req.delta_cents
     if new_amount < 0:
         raise AppError(code="insufficient_balance", message="Balance cannot go below zero", http_status=409)
@@ -142,6 +196,7 @@ async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSessi
             event_type=req.reason,
             delta_cents=req.delta_cents,
             description=req.description,
+            idempotency_key=key,
         )
     )
     await db.commit()
@@ -164,6 +219,7 @@ async def validate(req: ValidateChipRequest, db: AsyncSession = Depends(get_db))
     return ValidateChipResponse(
         chip_id=chip.id,
         uid=chip.uid,
+        holder_name=chip.holder_name,
         is_enabled=chip.is_enabled,
         assigned_user_id=chip.assigned_user_id,
         balance_cents=bal.amount_cents,

@@ -12,3 +12,12 @@ class SimulateRfidRequest(BaseModel):
 class SimulateCashRequest(BaseModel):
     amount_cents: int = Field(gt=0, le=1_000_00)
 
+
+class SimulateFingerprintRequest(BaseModel):
+    # None simulates a finger that matches no stored template.
+    slot: int | None = Field(default=None, ge=0, le=1000)
+
+
+class FingerprintEnrollRequest(BaseModel):
+    session_id: str = Field(min_length=4, max_length=64)
+

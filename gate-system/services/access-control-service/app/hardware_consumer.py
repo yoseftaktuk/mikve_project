@@ -3,45 +3,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
-from pathlib import Path
 
 import redis.asyncio as redis
 
 from .access_logic import CashSession, process_cash_inserted, process_chip_access
 from .clients import ChipClient, HardwareClient
 from .db import SessionLocal
+from .fingerprint_logic import (
+    PendingApprovalStore,
+    PendingEnrollmentStore,
+    complete_enrollment,
+    process_fingerprint_scan,
+    process_fingerprint_unmatched,
+)
 
 logger = logging.getLogger(__name__)
 
-# #region agent log
-_DEBUG_LOG_PATH = Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log")
-
-
-def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    payload = {
-        "sessionId": "359384",
-        "runId": "coin-pre",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    logger.warning("AGENT_DEBUG %s", json.dumps(payload, ensure_ascii=True))
-
-
-# #endregion
-
 
 class HardwareEventConsumer:
-    """Subscribes to hardware.events and runs chip/cash access logic."""
+    """Subscribes to hardware.events and runs chip/cash/fingerprint access logic."""
 
     def __init__(
         self,
@@ -51,12 +31,16 @@ class HardwareEventConsumer:
         hardware_client: HardwareClient,
         cash_session: CashSession,
         publish,
+        approvals: PendingApprovalStore,
+        enrollments: PendingEnrollmentStore,
     ) -> None:
         self._redis_url = redis_url
         self._chip_client = chip_client
         self._hardware_client = hardware_client
         self._cash_session = cash_session
         self._publish = publish
+        self._approvals = approvals
+        self._enrollments = enrollments
         self._redis: redis.Redis | None = None
         self._task: asyncio.Task | None = None
 
@@ -94,7 +78,7 @@ class HardwareEventConsumer:
             await pubsub.aclose()
 
     async def _handle(self, raw: str) -> None:
-        """Dispatch rfid.scan and cash.inserted events to access handlers."""
+        """Dispatch rfid, cash, and fingerprint events to access handlers."""
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:
@@ -119,14 +103,6 @@ class HardwareEventConsumer:
 
             if event_type == "cash.inserted":
                 amount_cents = event.get("amount_cents")
-                # #region agent log
-                _agent_dbg(
-                    "D",
-                    "hardware_consumer.py:_handle",
-                    "cash_inserted_received",
-                    {"amount_cents": amount_cents, "event": event},
-                )
-                # #endregion
                 if amount_cents is None:
                     return
                 async with SessionLocal() as db:
@@ -137,16 +113,40 @@ class HardwareEventConsumer:
                         hardware_client=self._hardware_client,
                         publish=self._publish,
                     )
-                # #region agent log
-                _agent_dbg(
-                    "D",
-                    "hardware_consumer.py:_handle",
-                    "cash_inserted_processed",
-                    {
-                        "amount_cents": int(amount_cents),
-                        "accumulated_cents": self._cash_session.accumulated_cents,
-                    },
+                return
+
+            if event_type == "fingerprint.scan":
+                slot = event.get("slot")
+                if slot is None:
+                    return
+                async with SessionLocal() as db:
+                    await process_fingerprint_scan(
+                        int(slot),
+                        db,
+                        chip_client=self._chip_client,
+                        publish=self._publish,
+                        approvals=self._approvals,
+                        confidence=event.get("confidence"),
+                    )
+                return
+
+            if event_type == "fingerprint.unmatched":
+                async with SessionLocal() as db:
+                    await process_fingerprint_unmatched(db, publish=self._publish)
+                return
+
+            if event_type == "fingerprint.enrolled":
+                session_id = event.get("session_id")
+                slot = event.get("slot")
+                if not session_id or slot is None:
+                    return
+                await complete_enrollment(
+                    str(session_id),
+                    int(slot),
+                    chip_client=self._chip_client,
+                    publish=self._publish,
+                    enrollments=self._enrollments,
                 )
-                # #endregion
+                return
         except Exception:
             logger.exception("hardware_event_handle_failed event=%s", raw)

@@ -16,6 +16,7 @@ class ChipValidation:
     is_enabled: bool
     assigned_user_id: str | None
     balance_cents: int
+    holder_name: str | None = None
 
 
 class ChipClient:
@@ -24,12 +25,20 @@ class ChipClient:
     def __init__(self) -> None:
         self._base = settings.chip_service_url.rstrip("/")
 
-    async def register(self, uid: str) -> None:
+    async def register(self, uid: str, holder_name: str | None = None) -> None:
         """Create a chip record for the given UID if it does not already exist."""
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/chips", json={"uid": uid})
+            resp = await client.post(f"{self._base}/chips", json={"uid": uid, "holder_name": holder_name})
         if resp.status_code == 400:
             return
+        resp.raise_for_status()
+
+    async def rename(self, chip_id: str, holder_name: str | None) -> None:
+        """Set the holder name shown on scans and management screens."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.patch(
+                f"{self._base}/chips/{chip_id}/name", json={"holder_name": holder_name}
+            )
         resp.raise_for_status()
 
     async def validate(self, uid: str) -> ChipValidation:
@@ -46,6 +55,7 @@ class ChipClient:
             is_enabled=bool(data["is_enabled"]),
             assigned_user_id=data.get("assigned_user_id"),
             balance_cents=int(data["balance_cents"]),
+            holder_name=data.get("holder_name"),
         )
 
     async def adjust_balance(self, chip_id: str, delta_cents: int, reason: str, description: str | None = None) -> int:
@@ -62,71 +72,25 @@ class ChipClient:
 
 
 class HardwareClient:
-    """HTTP client for hardware-service door control."""
+    """HTTP client for hardware-service door and fingerprint control."""
 
     def __init__(self) -> None:
         self._base = settings.hardware_service_url.rstrip("/")
 
     async def open_door(self, seconds: int) -> None:
         """Ask hardware-service to unlock the door for the given seconds."""
-        # #region agent log
-        import json
-        import time
-        from pathlib import Path
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(f"{self._base}/door/open", json={"seconds": seconds})
+        resp.raise_for_status()
 
-        _dbg = {
-            "sessionId": "359384",
-            "runId": "door-pre",
-            "hypothesisId": "A",
-            "location": "clients.py:open_door",
-            "message": "open_door_request",
-            "data": {"base": self._base, "seconds": seconds, "url": f"{self._base}/door/open"},
-            "timestamp": int(time.time() * 1000),
-        }
-        try:
-            Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log").open("a").write(
-                json.dumps(_dbg) + "\n"
-            )
-        except Exception:
-            pass
-        # #endregion
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.post(f"{self._base}/door/open", json={"seconds": seconds})
-            # #region agent log
-            _dbg2 = {
-                "sessionId": "359384",
-                "runId": "door-pre",
-                "hypothesisId": "A",
-                "location": "clients.py:open_door",
-                "message": "open_door_response",
-                "data": {"base": self._base, "status_code": resp.status_code},
-                "timestamp": int(time.time() * 1000),
-            }
-            try:
-                Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log").open("a").write(
-                    json.dumps(_dbg2) + "\n"
-                )
-            except Exception:
-                pass
-            # #endregion
-            resp.raise_for_status()
-        except Exception as exc:
-            # #region agent log
-            _dbg3 = {
-                "sessionId": "359384",
-                "runId": "door-pre",
-                "hypothesisId": "A",
-                "location": "clients.py:open_door",
-                "message": "open_door_failed",
-                "data": {"base": self._base, "error": f"{type(exc).__name__}: {exc}"},
-                "timestamp": int(time.time() * 1000),
-            }
-            try:
-                Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log").open("a").write(
-                    json.dumps(_dbg3) + "\n"
-                )
-            except Exception:
-                pass
-            # #endregion
-            raise
+    async def enroll_fingerprint(self, session_id: str) -> None:
+        """Start a fingerprint enrollment; progress arrives via hardware.events."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(f"{self._base}/fingerprint/enroll", json={"session_id": session_id})
+        resp.raise_for_status()
+
+    async def cancel_enroll(self) -> None:
+        """Abort a running fingerprint enrollment."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(f"{self._base}/fingerprint/enroll/cancel")
+        resp.raise_for_status()
