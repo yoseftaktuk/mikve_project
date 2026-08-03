@@ -103,6 +103,30 @@ services:
       - ./apps/dashboard/.env
     restart: unless-stopped
 
+  # Named Cloudflare Tunnel (Zero Trust token). Enable with:
+  #   CLOUDFLARE_TUNNEL_TOKEN=... docker compose --profile tunnel up -d
+  # Set payment-service PUBLIC_BASE_URL to https://<your-hostname> first.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - nginx
+    restart: unless-stopped
+
+  # Ephemeral trycloudflare.com URL for a one-shot callback smoke test.
+  #   docker compose --profile quick-tunnel up cloudflared-quick
+  # Copy the printed https://….trycloudflare.com URL into PUBLIC_BASE_URL.
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    profiles: ["quick-tunnel"]
+    command: tunnel --no-autoupdate --url http://nginx:80
+    depends_on:
+      - nginx
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

@@ -18,6 +18,8 @@ Services:
 - `chip-service`: chip registry, balances, chip history (fingerprints are virtual chips `FP-<slot>`)
 - `hardware-service`: RFID reader + coin acceptor + relay lock + fingerprint sensor + health monitoring
 - `access-control-service`: orchestrates entrance authorization, logs access, real-time events
+- `payment-service`: cash stub + **Nedarim Plus** credit-card balance top-up (callback is the only credit path)
+- `cloudflared` (optional compose profile): Cloudflare Tunnel so Nedarim can reach the callback over HTTPS
 
 ## Quickstart (Docker)
 
@@ -497,6 +499,43 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --bui
 
 **Live reload (localhost):** `docker compose up` auto-loads `docker-compose.override.yml`. Change Python or dashboard files and services reload in place. Rebuild only when dependencies (`requirements.txt` / `package.json`) change.
 
+## Nedarim Plus card top-up (Cloudflare Tunnel)
+
+Card top-up needs a **public HTTPS origin**:
+
+1. The kiosk page must not be plain `localhost` (Nedarim `postMessage` requires a real domain).
+2. Nedarim posts the CallBack once from `18.196.146.117` / `18.194.219.73`.
+
+### Named tunnel (production)
+
+1. In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel and a public hostname (e.g. `gate-pay.example.org`) pointing at `http://nginx:80`. Prefer exposing only that hostname; keep LAN `:80` for management.
+2. Put the tunnel token in root `.env` as `CLOUDFLARE_TUNNEL_TOKEN=…`.
+3. Set `PUBLIC_BASE_URL=https://gate-pay.example.org` in `services/payment-service/.env` (no trailing slash).
+4. Start with the profile:
+
+```bash
+docker compose --profile tunnel up -d --build
+# or on the LAN server compose:
+docker compose -f deploy/docker-compose.server.yml --project-directory . --env-file .env --profile tunnel up -d --build
+```
+
+5. Confirm `GET /api/payments/healthz` shows `public_base_url_set: true` and `nedarim_configured: true`.
+
+Path-filtered ingress example: `deploy/cloudflared/config.example.yml`.
+
+### Quick tunnel (one-shot smoke)
+
+```bash
+docker compose --profile quick-tunnel up cloudflared-quick
+# Wait for a line like: https://xxxx.trycloudflare.com
+```
+
+Copy that URL into `services/payment-service/.env` as `PUBLIC_BASE_URL`, restart `payment-service`, then create a ₪20 top-up from the kiosk (or `POST /api/payments/card-topups`). The URL changes every restart — use a named tunnel for real use.
+
+### Kiosk flow reminder
+
+Fingerprint with balance &lt; entrance fee → Coins / Credit card / Cancel → presets ₪20 / ₪50 / ₪100 → Nedarim iframe → CallBack credits chip balance → scan again to enter. Coins still pay the door fee in-session; they do not top up balance.
+
 ## Folder structure
 
 ```
@@ -507,11 +546,13 @@ gate-system/
     access-control-service/
     chip-service/
     hardware-service/
+    payment-service/           # Nedarim Plus top-up + legacy charge stub
   shared/
     py/                        # shared Python package (settings, errors, logging)
   deploy/
     nginx/
     postgres/
+    cloudflared/               # example tunnel ingress
     docker-compose.server.yml  # LAN backend (no hardware)
     docker-compose.edge.yml    # Pi edge (hardware + dashboard)
     docker-compose.pi.yml      # GPIO override for single-host Pi
@@ -527,6 +568,7 @@ Unit tests per service (each service has its own `pytest.ini`):
 ```bash
 cd services/access-control-service && pytest   # fingerprint approval/scan/enrollment logic
 cd services/hardware-service && pytest         # sensor driver against a fake AS608
+cd services/payment-service && pytest          # Nedarim create/callback/idempotency
 ```
 
 Dashboard checks:
@@ -539,4 +581,5 @@ cd apps/dashboard && npm run lint && npm run build
 
 - Add Alembic migrations per service schema
 - Harden production settings (TLS, secrets manager, HSTS, rate limiting config)
+- Optional: set Nedarim `CallBackMailError` so failed callback delivery emails someone on staff
 

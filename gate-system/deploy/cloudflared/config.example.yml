@@ -1,0 +1,28 @@
+# Example ingress for a *named* Cloudflare Tunnel (config-file mode).
+# Prefer the Zero Trust token flow in docker-compose (`profile: tunnel`) unless
+# you specifically need a credentials file on disk.
+#
+# Goal: publish only what card top-up needs on a dedicated hostname.
+# Keep management / hardware / chip APIs on the LAN nginx port.
+#
+# Replace TUNNEL_UUID and the hostname, then point Cloudflare DNS at the tunnel.
+
+tunnel: TUNNEL_UUID
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  # Nedarim server-to-server CallBack (must be reachable from their IPs).
+  - hostname: gate-pay.example.org
+    path: /api/payments/nedarim/callback
+    service: http://nginx:80
+
+  # Kiosk top-up UI + payment-service APIs used by that UI
+  # (create / status / abandon / healthz). SPA assets are under /.
+  - hostname: gate-pay.example.org
+    path: /api/payments/
+    service: http://nginx:80
+
+  - hostname: gate-pay.example.org
+    service: http://nginx:80
+
+  - service: http_status:404

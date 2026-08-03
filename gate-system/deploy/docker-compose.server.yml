@@ -104,6 +104,19 @@ services:
       - ./apps/dashboard/.env
     restart: unless-stopped
 
+  # Named Cloudflare Tunnel for Nedarim callbacks + public top-up hostname.
+  # CLOUDFLARE_TUNNEL_TOKEN=... docker compose -f deploy/docker-compose.server.yml \
+  #   --project-directory . --env-file .env --profile tunnel up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - nginx
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

@@ -27,6 +27,10 @@ class Settings(CommonSettings):
     # the tunnel/public hostname rather than the internal nginx address.
     public_base_url: str = Field(default="", alias="PUBLIC_BASE_URL")
 
+    # Reject callbacks that did not arrive through Cloudflare (no CF-Connecting-IP).
+    # Local unit tests call process_nedarim_callback directly and skip this gate.
+    nedarim_require_cloudflare: bool = Field(default=True, alias="NEDARIM_REQUIRE_CLOUDFLARE")
+
     topup_amounts_cents: str = Field(default="2000,5000,10000", alias="TOPUP_AMOUNTS_CENTS")
 
     @property

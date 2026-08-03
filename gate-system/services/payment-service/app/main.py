@@ -189,6 +189,16 @@ async def nedarim_callback(
             content={"status": "error", "code": "bad_payload", "message": "Body must be a JSON object"},
         )
 
+    if settings.nedarim_require_cloudflare and not request.headers.get("cf-connecting-ip"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "status": "error",
+                "code": "missing_cf",
+                "message": "Callback must arrive through Cloudflare Tunnel",
+            },
+        )
+
     source_ip = resolve_callback_source_ip(request)
     result = await process_nedarim_callback(
         topup_id=topup_id,
