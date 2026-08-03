@@ -1,0 +1,23 @@
+# Local configuration and secrets. Every service ships a .env.example instead;
+# copy it to .env and fill in real values on each machine.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Editors and OS
+.DS_Store
+*.swp
