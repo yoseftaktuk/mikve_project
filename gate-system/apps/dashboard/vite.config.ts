@@ -115,6 +115,17 @@ export default defineConfig({
     }),
   ],
   server: {
+    host: true,
+    port: Number(process.env.VITE_DEV_PORT ?? 5173),
+    // Docker Desktop file events are unreliable without polling.
+    watch: {
+      usePolling: true,
+      interval: 300,
+    },
+    hmr: {
+      // When behind nginx in Compose, set VITE_HMR_CLIENT_PORT=80.
+      clientPort: Number(process.env.VITE_HMR_CLIENT_PORT ?? process.env.VITE_DEV_PORT ?? 5173),
+    },
     proxy: {
       '/api': {
         target: process.env.VITE_DEV_PROXY_TARGET ?? 'http://localhost',

@@ -69,6 +69,64 @@ class HardwareClient:
 
     async def open_door(self, seconds: int) -> None:
         """Ask hardware-service to unlock the door for the given seconds."""
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/door/open", json={"seconds": seconds})
-        resp.raise_for_status()
+        # #region agent log
+        import json
+        import time
+        from pathlib import Path
+
+        _dbg = {
+            "sessionId": "359384",
+            "runId": "door-pre",
+            "hypothesisId": "A",
+            "location": "clients.py:open_door",
+            "message": "open_door_request",
+            "data": {"base": self._base, "seconds": seconds, "url": f"{self._base}/door/open"},
+            "timestamp": int(time.time() * 1000),
+        }
+        try:
+            Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log").open("a").write(
+                json.dumps(_dbg) + "\n"
+            )
+        except Exception:
+            pass
+        # #endregion
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.post(f"{self._base}/door/open", json={"seconds": seconds})
+            # #region agent log
+            _dbg2 = {
+                "sessionId": "359384",
+                "runId": "door-pre",
+                "hypothesisId": "A",
+                "location": "clients.py:open_door",
+                "message": "open_door_response",
+                "data": {"base": self._base, "status_code": resp.status_code},
+                "timestamp": int(time.time() * 1000),
+            }
+            try:
+                Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log").open("a").write(
+                    json.dumps(_dbg2) + "\n"
+                )
+            except Exception:
+                pass
+            # #endregion
+            resp.raise_for_status()
+        except Exception as exc:
+            # #region agent log
+            _dbg3 = {
+                "sessionId": "359384",
+                "runId": "door-pre",
+                "hypothesisId": "A",
+                "location": "clients.py:open_door",
+                "message": "open_door_failed",
+                "data": {"base": self._base, "error": f"{type(exc).__name__}: {exc}"},
+                "timestamp": int(time.time() * 1000),
+            }
+            try:
+                Path("/Users/natankatz/mikve_project/.cursor/debug-359384.log").open("a").write(
+                    json.dumps(_dbg3) + "\n"
+                )
+            except Exception:
+                pass
+            # #endregion
+            raise

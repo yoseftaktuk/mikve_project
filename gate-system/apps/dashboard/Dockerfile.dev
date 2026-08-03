@@ -1,0 +1,19 @@
+# Development image: Vite with hot module reload (used by docker-compose.override.yml).
+FROM node:20-alpine
+
+WORKDIR /app
+
+ENV NPM_CONFIG_FETCH_RETRIES=10 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=600000 \
+    CHOKIDAR_USEPOLLING=true \
+    WATCHPACK_POLLING=true
+
+COPY package.json package-lock.json /app/
+RUN npm ci
+
+COPY . /app
+
+EXPOSE 80
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "80"]

@@ -37,6 +37,14 @@ cp apps/dashboard/.env.example apps/dashboard/.env
 docker compose up --build
 ```
 
+`docker-compose.override.yml` is merged automatically. It mounts local source and enables **live reload** (Python `uvicorn --reload`, dashboard Vite HMR). Edit code on your machine and the containers pick it up without rebuilding.
+
+Production-like run (no live reload / no source mounts):
+
+```bash
+docker compose -f docker-compose.yml up --build
+```
+
 3. Open:
 
 - **Dashboard**: `http://localhost/`
@@ -336,7 +344,39 @@ Start the edge stack (GPIO mounts included):
 docker compose -f deploy/docker-compose.edge.yml --project-directory . --env-file .env.edge up -d --build
 ```
 
-### 3. Open the UI
+### 3. Auto-start on boot (systemd)
+
+Units live in `deploy/systemd/` and only cover **split deploy**.
+
+**On the LAN server** (after `.env` is configured):
+
+```bash
+cd gate-system
+chmod +x deploy/systemd/install.sh
+sudo ./deploy/systemd/install.sh server
+```
+
+**On the Raspberry Pi** (after `.env.edge` and hardware `.env` are configured):
+
+```bash
+cd gate-system
+chmod +x deploy/systemd/install.sh
+sudo ./deploy/systemd/install.sh edge
+```
+
+The install script sets `WorkingDirectory` to your current `gate-system` path, enables the unit, and starts it.
+
+Useful commands:
+
+```bash
+sudo systemctl status gate-system-edge    # Pi
+sudo systemctl status gate-system-server  # server
+sudo journalctl -u gate-system-edge -e
+```
+
+First build still needs a manual `--build` once (or after dependency changes). Daily boot only runs `up -d`.
+
+### 4. Open the UI
 
 - Kiosk / Pi: `http://<PI_LAN_IP>/` (edge Nginx proxies business APIs to the server)
 - Server / admin PC: `http://<SERVER_LAN_IP>/`
@@ -353,9 +393,11 @@ Local development and all-in-one Pi installs still use:
 
 ```bash
 docker compose up --build
-# or with GPIO:
+# or with GPIO (explicit -f skips docker-compose.override.yml live-reload):
 docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --build
 ```
+
+**Live reload (localhost):** `docker compose up` auto-loads `docker-compose.override.yml`. Change Python or dashboard files and services reload in place. Rebuild only when dependencies (`requirements.txt` / `package.json`) change.
 
 ## Folder structure
 
@@ -375,6 +417,8 @@ gate-system/
     docker-compose.server.yml  # LAN backend (no hardware)
     docker-compose.edge.yml    # Pi edge (hardware + dashboard)
     docker-compose.pi.yml      # GPIO override for single-host Pi
+    systemd/                   # split-deploy boot units (edge + server)
+  docker-compose.override.yml  # Local live reload (auto-merged on `docker compose up`)
   diagrams/                    # Mermaid + UML-like docs
 ```
 

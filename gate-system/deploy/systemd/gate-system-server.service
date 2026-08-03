@@ -1,0 +1,18 @@
+[Unit]
+Description=Gate System Server (LAN backend: postgres, redis, APIs, dashboard, nginx)
+Documentation=file:///opt/gate-system/README.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Change this path to where gate-system/ lives on the server PC.
+WorkingDirectory=/opt/gate-system
+ExecStart=/usr/bin/docker compose -f deploy/docker-compose.server.yml --project-directory . --env-file .env up -d
+ExecStop=/usr/bin/docker compose -f deploy/docker-compose.server.yml --project-directory . --env-file .env down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
