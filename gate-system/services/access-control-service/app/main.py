@@ -1,5 +1,6 @@
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 import redis.asyncio as redis
@@ -23,6 +24,8 @@ from .fingerprint_logic import (
 from .hardware_consumer import HardwareEventConsumer
 from .models import AccessLog, Base, HardwareEvent
 from .realtime import PubSubFanout
+from .saga import AccessAttemptReconciler, AccessOrchestrator
+from .saga import models as saga_models  # noqa: F401 — register saga tables on Base.metadata
 from .schemas import (
     AccessAttemptRequest,
     AccessDecisionResponse,
@@ -66,18 +69,26 @@ enrollments = PendingEnrollmentStore()
 fanout = PubSubFanout(settings.redis_url)
 hardware_consumer: HardwareEventConsumer | None = None
 redis_client: redis.Redis | None = None
+orchestrator: AccessOrchestrator | None = None
+reconciler: AccessAttemptReconciler | None = None
 
 
 @app.on_event("startup")
 async def startup() -> None:
     """Create tables, connect Redis, and start event consumers."""
-    global redis_client, hardware_consumer
+    global redis_client, hardware_consumer, orchestrator, reconciler
     configure_logging(settings.service_name, settings.log_level)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     cash_session.set_publish(_publish)
     approvals.set_publish(_publish)
+    orchestrator = AccessOrchestrator(
+        chip_client=chip_client,
+        hardware_client=hardware_client,
+        cash_session=cash_session,
+        publish=_publish,
+    )
     await fanout.start()
     hardware_consumer = HardwareEventConsumer(
         settings.redis_url,
@@ -89,18 +100,25 @@ async def startup() -> None:
         enrollments=enrollments,
     )
     await hardware_consumer.start()
+    if settings.access_saga_enabled:
+        reconciler = AccessAttemptReconciler(orchestrator)
+        await reconciler.start()
     logger.info(
-        "startup_complete entrance_fee_cents=%s door_unlock_seconds=%s cash_session_timeout_seconds=%s",
+        "startup_complete entrance_fee_cents=%s door_unlock_seconds=%s cash_session_timeout_seconds=%s access_saga_enabled=%s",
         settings.entrance_fee_cents,
         settings.door_unlock_seconds,
         settings.cash_session_timeout_seconds,
+        settings.access_saga_enabled,
     )
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
     """Stop consumers and close Redis on service shutdown."""
-    global redis_client, hardware_consumer
+    global redis_client, hardware_consumer, reconciler
+    if reconciler is not None:
+        await reconciler.stop()
+        reconciler = None
     await cash_session.shutdown()
     await approvals.shutdown()
     enrollments.clear()
@@ -173,6 +191,7 @@ async def fingerprint_approve(req: FingerprintApprovalRequest, db: AsyncSession 
             hardware_client=hardware_client,
             publish=_publish,
             approvals=approvals,
+            cash_session=cash_session,
         )
     except ValueError as exc:
         raise AppError(
@@ -250,6 +269,47 @@ async def management_chip_info(uid: str):
 async def management_chip_topup(req: ChipTopupRequest):
     """Top up a chip balance from the management panel."""
     return await topup_chip(req, chip_client)
+
+
+@app.post(
+    "/management/cash-receipts/redeem",
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_redeem_cash_receipt(body: dict, db: AsyncSession = Depends(get_db)):
+    """Mark a cash compensation receipt as paid out from the till."""
+    if orchestrator is None:
+        raise AppError(code="saga_unavailable", message="Saga not started", http_status=503)
+    code = str(body.get("redeem_code", "")).strip()
+    staff_id = str(body.get("staff_id") or "management")
+    try:
+        receipt = await orchestrator.redeem_receipt(code, staff_id, db)
+    except ValueError as exc:
+        raise AppError(code=str(exc), message=str(exc), http_status=409) from None
+    return {
+        "receipt_id": str(receipt.id),
+        "attempt_id": str(receipt.attempt_id),
+        "amount_cents": receipt.amount_cents,
+        "status": receipt.status,
+        "redeemed_at": receipt.redeemed_at.isoformat() if receipt.redeemed_at else None,
+    }
+
+
+@app.post(
+    "/management/access-attempts/{attempt_id}/resolve",
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_resolve_attempt(attempt_id: str, body: dict, db: AsyncSession = Depends(get_db)):
+    """Staff resolves a MANUAL_REVIEW attempt after handling compensation offline."""
+    if orchestrator is None:
+        raise AppError(code="saga_unavailable", message="Saga not started", http_status=503)
+    note = str(body.get("note") or "resolved")
+    try:
+        attempt = await orchestrator.resolve_manual_review(uuid.UUID(attempt_id), note, db)
+    except ValueError as exc:
+        raise AppError(code=str(exc), message=str(exc), http_status=409) from None
+    return {"attempt_id": str(attempt.id), "status": attempt.status}
 
 
 @app.post(

@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 import redis.asyncio as redis
-from fastapi import FastAPI, status
+from fastapi import FastAPI, HTTPException, status
 
 from gate_shared.logging import configure_logging
 
@@ -12,6 +12,7 @@ from .fingerprint import STEP_STORED
 from .hardware import MockHardwareAdapter, RpiHardwareAdapter
 from .schemas import (
     DoorOpenRequest,
+    DoorOpenResponse,
     FingerprintEnrollRequest,
     SimulateCashRequest,
     SimulateFingerprintRequest,
@@ -168,24 +169,59 @@ async def get_status():
     }
 
 
-async def _open_door_task(seconds: int) -> None:
+async def _open_door_task(seconds: int, *, operation_id: str | None = None, attempt_id: str | None = None) -> None:
     """Unlock the door for the given seconds and publish door.opened."""
     try:
         await adapter.open_door(seconds=seconds)
-        await _publish(
-            "hardware.events",
-            {"type": "door.opened", "seconds": seconds, "ts": datetime.now(timezone.utc).isoformat()},
-        )
+        payload = {
+            "type": "door.opened",
+            "seconds": seconds,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        if operation_id:
+            payload["operation_id"] = operation_id
+        if attempt_id:
+            payload["attempt_id"] = attempt_id
+        await _publish("hardware.events", payload)
     except Exception:
-        logger.exception("door_open_failed seconds=%s", seconds)
+        logger.exception("door_open_failed seconds=%s operation_id=%s", seconds, operation_id)
+        fail = {
+            "type": "door.failed",
+            "seconds": seconds,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        if operation_id:
+            fail["operation_id"] = operation_id
+        if attempt_id:
+            fail["attempt_id"] = attempt_id
+        await _publish("hardware.events", fail)
 
 
-@app.post("/door/open", status_code=status.HTTP_204_NO_CONTENT)
+@app.post("/door/open", response_model=DoorOpenResponse)
 async def open_door(req: DoorOpenRequest):
-    """Start a background task to unlock the door relay."""
+    """Unlock the door relay and return confirmation when the command succeeds.
+
+    Success means the unlock pulse was started without error — not that a person
+    walked through. Optional operation_id / attempt_id are echoed for saga correlation.
+    """
     seconds = req.seconds or settings.door_unlock_seconds
-    asyncio.create_task(_open_door_task(seconds))
-    return None
+    if adapter is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="door_unavailable")
+    st = await adapter.get_status()
+    if not st.door_relay_connected:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="door_unavailable")
+
+    # Adapters block for the full unlock hold; confirm acceptance immediately and run
+    # the hold in the background so access-control's DOOR_OPEN_TIMEOUT_MS is meaningful.
+    asyncio.create_task(
+        _open_door_task(seconds, operation_id=req.operation_id, attempt_id=req.attempt_id)
+    )
+
+    return DoorOpenResponse(
+        operation_id=req.operation_id,
+        status="confirmed",
+        unlocked_for_seconds=seconds,
+    )
 
 
 async def _enroll_task(session_id: str) -> None:

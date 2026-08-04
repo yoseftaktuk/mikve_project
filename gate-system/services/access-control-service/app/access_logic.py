@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +20,14 @@ logger = logging.getLogger(__name__)
 PublishFn = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class CashTakeResult:
+    """Result of an atomic cash fee take."""
+
+    ok: bool
+    paid_total_cents: int = 0
+
+
 class CashSession:
     """Tracks partial cash payments and resets them after inactivity."""
 
@@ -28,6 +37,9 @@ class CashSession:
         self._timeout_seconds = max(0, timeout_seconds)
         self._reset_task: asyncio.Task[None] | None = None
         self._publish: PublishFn | None = None
+        self._taken_attempt_id: str | None = None
+        self._last_paid_total: int = 0
+        self._last_fee_cents: int = 0
 
     @property
     def accumulated_cents(self) -> int:
@@ -89,6 +101,33 @@ class CashSession:
                 }
             )
 
+    async def clear_for_other_method(self) -> int:
+        """Clear abandoned partial cash when chip/fingerprint entry succeeds.
+
+        Returns the cleared amount in cents (0 if the session was already empty).
+        """
+        await self._cancel_reset_timer()
+        async with self._lock:
+            previous = self._accumulated_cents
+            if previous <= 0:
+                return 0
+            self._accumulated_cents = 0
+
+        logger.info(
+            "cash_session_cleared reason=method_switched previous_total_cents=%s",
+            previous,
+        )
+        if self._publish is not None:
+            await self._publish(
+                {
+                    "type": "cash.reset",
+                    "reason": "method_switched",
+                    "previous_total_cents": previous,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        return previous
+
     async def add(self, amount_cents: int) -> int:
         """Add inserted cash and refresh the inactivity reset timer."""
         await self._cancel_reset_timer()
@@ -99,13 +138,72 @@ class CashSession:
             self._schedule_reset()
         return total
 
-    async def take_fee(self, fee_cents: int) -> int:
-        """Deduct the entrance fee from accumulated cash and return the paid total."""
+    async def take_fee(self, fee_cents: int, *, attempt_id: str | None = None) -> int:
+        """Take the entrance fee from accumulated cash and return the paid total.
+
+        Overpayment is discarded (session balance becomes 0). When attempt_id is set,
+        a second call for the same attempt is idempotent.
+        Prefer CashTakeResult via try_pay for new saga callers.
+        """
+        result = await self.try_pay(fee_cents=fee_cents, attempt_id=attempt_id or "")
+        if not result.ok:
+            return 0
+        return result.paid_total_cents
+
+    async def try_pay(self, *, fee_cents: int, attempt_id: str) -> "CashTakeResult":
+        """Atomically take the fee for an attempt (idempotent per attempt_id).
+
+        On success the session balance is cleared to 0 so overpayment never carries
+        into the next visitor's payment. Discarded overage emits cash.reset.
+        """
         await self._cancel_reset_timer()
+        discarded_cents = 0
+        paid = 0
         async with self._lock:
+            if attempt_id and self._taken_attempt_id == attempt_id:
+                return CashTakeResult(ok=True, paid_total_cents=self._last_paid_total)
+            if self._accumulated_cents < fee_cents:
+                return CashTakeResult(ok=False, paid_total_cents=self._accumulated_cents)
             paid = self._accumulated_cents
-            self._accumulated_cents = max(0, self._accumulated_cents - fee_cents)
-            return paid
+            discarded_cents = max(0, paid - fee_cents)
+            # Discard leftover so change does not seed the next payment.
+            self._accumulated_cents = 0
+            if attempt_id:
+                self._taken_attempt_id = attempt_id
+                self._last_paid_total = paid
+                self._last_fee_cents = fee_cents
+
+        if discarded_cents > 0:
+            logger.info(
+                "cash_overpay_discarded paid_total_cents=%s fee_cents=%s discarded_cents=%s",
+                paid,
+                fee_cents,
+                discarded_cents,
+            )
+            if self._publish is not None:
+                await self._publish(
+                    {
+                        "type": "cash.reset",
+                        "reason": "overpay_discarded",
+                        "previous_total_cents": paid,
+                        "discarded_cents": discarded_cents,
+                        "fee_cents": fee_cents,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+        return CashTakeResult(ok=True, paid_total_cents=paid)
+
+    async def restore_fee(self, attempt_id: str) -> bool:
+        """Best-effort put the fee back into the session for the same attempt."""
+        async with self._lock:
+            if self._taken_attempt_id != attempt_id:
+                return False
+            self._accumulated_cents += self._last_fee_cents
+            self._taken_attempt_id = None
+            self._last_fee_cents = 0
+            if self._accumulated_cents > 0:
+                self._schedule_reset()
+            return True
 
 
 async def process_chip_access(
@@ -115,8 +213,36 @@ async def process_chip_access(
     chip_client: ChipClient,
     hardware_client: HardwareClient,
     publish,
+    cash_session: CashSession | None = None,
+    hardware_event_id: str | None = None,
 ) -> AccessDecisionResponse:
     """Validate a chip, charge the entrance fee, and open the door if allowed."""
+    if settings.access_saga_enabled:
+        from .saga import AccessOrchestrator
+
+        session = cash_session or CashSession(timeout_seconds=settings.cash_session_timeout_seconds)
+        orch = AccessOrchestrator(
+            chip_client=chip_client,
+            hardware_client=hardware_client,
+            cash_session=session,
+            publish=publish,
+        )
+        return await orch.run_chip_access(uid, db, hardware_event_id=hardware_event_id)
+
+    return await _legacy_process_chip_access(
+        uid, db, chip_client=chip_client, hardware_client=hardware_client, publish=publish
+    )
+
+
+async def _legacy_process_chip_access(
+    uid: str,
+    db: AsyncSession,
+    *,
+    chip_client: ChipClient,
+    hardware_client: HardwareClient,
+    publish,
+) -> AccessDecisionResponse:
+    """Pre-saga chip access path (kept behind ACCESS_SAGA_ENABLED=false)."""
     fee = settings.entrance_fee_cents
     door_seconds = settings.door_unlock_seconds
     ts = datetime.now(timezone.utc).isoformat()
@@ -273,8 +399,41 @@ async def process_cash_inserted(
     cash_session: CashSession,
     hardware_client: HardwareClient,
     publish,
+    chip_client: ChipClient | None = None,
+    hardware_event_id: str | None = None,
 ) -> tuple[bool, int]:
     """Accumulate cash and open the door once the entrance fee is reached."""
+    if settings.access_saga_enabled:
+        from .saga import AccessOrchestrator
+
+        orch = AccessOrchestrator(
+            chip_client=chip_client or ChipClient(),
+            hardware_client=hardware_client,
+            cash_session=cash_session,
+            publish=publish,
+        )
+        return await orch.run_cash_inserted(
+            amount_cents, db, hardware_event_id=hardware_event_id
+        )
+
+    return await _legacy_process_cash_inserted(
+        amount_cents,
+        db,
+        cash_session=cash_session,
+        hardware_client=hardware_client,
+        publish=publish,
+    )
+
+
+async def _legacy_process_cash_inserted(
+    amount_cents: int,
+    db: AsyncSession,
+    *,
+    cash_session: CashSession,
+    hardware_client: HardwareClient,
+    publish,
+) -> tuple[bool, int]:
+    """Pre-saga cash path (kept behind ACCESS_SAGA_ENABLED=false)."""
     fee = settings.entrance_fee_cents
     door_seconds = settings.door_unlock_seconds
     ts = datetime.now(timezone.utc).isoformat()

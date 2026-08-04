@@ -7,6 +7,14 @@ import httpx
 from .settings import settings
 
 
+class HardwareUnavailableError(Exception):
+    """Door hardware is unreachable or reports unavailable."""
+
+
+class DoorRejectedError(Exception):
+    """Door open was rejected (busy / policy)."""
+
+
 @dataclass(frozen=True)
 class ChipValidation:
     """Chip details returned by the chip-service validate endpoint."""
@@ -58,12 +66,22 @@ class ChipClient:
             holder_name=data.get("holder_name"),
         )
 
-    async def adjust_balance(self, chip_id: str, delta_cents: int, reason: str, description: str | None = None) -> int:
+    async def adjust_balance(
+        self,
+        chip_id: str,
+        delta_cents: int,
+        reason: str,
+        description: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> int:
         """Apply a balance delta and return the new balance in cents."""
+        body: dict = {"delta_cents": delta_cents, "reason": reason, "description": description}
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
                 f"{self._base}/chips/{chip_id}/balance/adjust",
-                json={"delta_cents": delta_cents, "reason": reason, "description": description},
+                json=body,
             )
         if resp.status_code == 409:
             raise ValueError("insufficient_balance")
@@ -77,11 +95,36 @@ class HardwareClient:
     def __init__(self) -> None:
         self._base = settings.hardware_service_url.rstrip("/")
 
-    async def open_door(self, seconds: int) -> None:
-        """Ask hardware-service to unlock the door for the given seconds."""
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/door/open", json={"seconds": seconds})
+    async def open_door(
+        self,
+        seconds: int,
+        *,
+        operation_id: str | None = None,
+        attempt_id: str | None = None,
+        correlation_id: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict:
+        """Ask hardware-service to unlock the door; prefer confirmed response."""
+        body: dict = {"seconds": seconds}
+        if operation_id:
+            body["operation_id"] = operation_id
+        if attempt_id:
+            body["attempt_id"] = attempt_id
+        if correlation_id:
+            body["correlation_id"] = correlation_id
+        timeout = timeout_seconds if timeout_seconds is not None else 5.0
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{self._base}/door/open", json=body)
+        if resp.status_code == 204:
+            return {"status": "confirmed", "unlocked_for_seconds": seconds, "operation_id": operation_id}
+        if resp.status_code == 503:
+            raise HardwareUnavailableError(resp.text)
+        if resp.status_code == 409:
+            raise DoorRejectedError(resp.text)
         resp.raise_for_status()
+        if resp.content:
+            return resp.json()
+        return {"status": "confirmed", "unlocked_for_seconds": seconds, "operation_id": operation_id}
 
     async def enroll_fingerprint(self, session_id: str) -> None:
         """Start a fingerprint enrollment; progress arrives via hardware.events."""

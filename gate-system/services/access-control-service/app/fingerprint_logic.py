@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .clients import ChipClient, HardwareClient
+from .access_logic import CashSession
 from .models import AccessLog
 from .schemas import AccessDecisionResponse
 from .settings import settings
@@ -375,73 +376,27 @@ async def approve_pending(
     hardware_client: HardwareClient,
     publish: PublishFn,
     approvals: PendingApprovalStore,
+    cash_session: CashSession | None = None,
 ) -> AccessDecisionResponse:
-    """Charge the entrance fee for a confirmed approval and open the door."""
+    """Charge the entrance fee for a confirmed approval via the access saga."""
+    from .saga import AccessOrchestrator
+
     approval = await approvals.consume(approval_id)
-    fee = approval.fee_cents
-    before = approval.balance_cents
-    ts = datetime.now(timezone.utc).isoformat()
-
-    try:
-        after = await chip_client.adjust_balance(
-            chip_id=approval.chip_id,
-            delta_cents=-fee,
-            reason="entry_fee",
-            description="entrance fee charged (fingerprint)",
-        )
-    except ValueError:
-        await _deny(
-            db,
-            publish=publish,
-            uid=approval.uid,
-            chip_id=approval.chip_id,
-            reason="insufficient_balance",
-            fee_cents=fee,
-            holder_name=approval.holder_name,
-            balance_cents=before,
-        )
-        return AccessDecisionResponse(
-            granted=False,
-            reason="insufficient_balance",
-            chip_id=approval.chip_id,
-            fee_cents=fee,
-            balance_before_cents=before,
-            balance_after_cents=before,
-        )
-
-    await hardware_client.open_door(seconds=settings.door_unlock_seconds)
-    db.add(
-        AccessLog(
-            chip_id=approval.chip_id,
-            uid=approval.uid,
-            decision="granted",
-            reason="ok",
-            fee_cents=fee,
-            balance_before_cents=before,
-            balance_after_cents=after,
-        )
+    session = cash_session if cash_session is not None else CashSession(timeout_seconds=1)
+    orch = AccessOrchestrator(
+        chip_client=chip_client,
+        hardware_client=hardware_client,
+        cash_session=session,
+        publish=publish,
     )
-    await db.commit()
-    await publish(
-        {
-            "type": "access.granted",
-            "method": "fingerprint",
-            "uid": approval.uid,
-            "chip_id": approval.chip_id,
-            "holder_name": approval.holder_name,
-            "fee_cents": fee,
-            "balance_after_cents": after,
-            "ts": ts,
-        }
-    )
-    logger.info("fingerprint_access_granted uid=%s fee_cents=%s", approval.uid, fee)
-    return AccessDecisionResponse(
-        granted=True,
-        reason="ok",
+    return await orch.run_fingerprint_approve(
+        approval_id=approval_id,
+        uid=approval.uid,
         chip_id=approval.chip_id,
-        fee_cents=fee,
-        balance_before_cents=before,
-        balance_after_cents=after,
+        holder_name=approval.holder_name,
+        balance_cents=approval.balance_cents,
+        fee_cents=approval.fee_cents,
+        db=db,
     )
 
 

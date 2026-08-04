@@ -31,12 +31,26 @@ class FakeDb:
     def __init__(self) -> None:
         self.rows: list[object] = []
         self.commits = 0
+        self._by_id: dict = {}
 
     def add(self, row: object) -> None:
         self.rows.append(row)
+        row_id = getattr(row, "id", None)
+        if row_id is not None:
+            self._by_id[row_id] = row
+
+    async def flush(self) -> None:
+        for row in self.rows:
+            row_id = getattr(row, "id", None)
+            if row_id is not None:
+                self._by_id[row_id] = row
 
     async def commit(self) -> None:
         self.commits += 1
+        await self.flush()
+
+    async def get(self, model: type, key: object) -> object | None:
+        return self._by_id.get(key)
 
 
 class FakeChipClient:
@@ -77,13 +91,28 @@ class FakeChipClient:
         self.renamed.append((chip_id, holder_name))
 
     async def adjust_balance(
-        self, chip_id: str, delta_cents: int, reason: str, description: str | None = None
+        self,
+        chip_id: str,
+        delta_cents: int,
+        reason: str,
+        description: str | None = None,
+        idempotency_key: str | None = None,
     ) -> int:
+        if idempotency_key:
+            for prev in self.adjustments:
+                # previous tuples are (chip_id, delta, reason) — treat same key as no-op
+                pass
+            for key, bal in list(getattr(self, "_idempotency", {}).items()):
+                if key == idempotency_key:
+                    return bal
         new_balance = self.balances[chip_id] + delta_cents
         if new_balance < 0:
             raise ValueError("insufficient_balance")
         self.balances[chip_id] = new_balance
         self.adjustments.append((chip_id, delta_cents, reason))
+        if idempotency_key:
+            self._idempotency = getattr(self, "_idempotency", {})
+            self._idempotency[idempotency_key] = new_balance
         return new_balance
 
 
@@ -91,8 +120,9 @@ class FakeHardwareClient:
     def __init__(self) -> None:
         self.door_opens = 0
 
-    async def open_door(self, seconds: int) -> None:
+    async def open_door(self, seconds: int, **kwargs) -> dict:
         self.door_opens += 1
+        return {"status": "confirmed", "unlocked_for_seconds": seconds}
 
 
 class Recorder:
@@ -200,6 +230,8 @@ async def test_scan_insufficient_balance_offers_topup():
 
 
 async def test_approve_charges_once_and_opens_door():
+    from tests.test_access_saga import _patch_repo
+
     uid = slot_to_uid(9)
     chip_client = FakeChipClient({uid: chip(uid, balance_cents=FEE * 3)})
     hardware_client = FakeHardwareClient()
@@ -213,14 +245,21 @@ async def test_approve_charges_once_and_opens_door():
     )
     assert approval is not None
 
-    decision = await approve_pending(
-        approval.approval_id,
-        db,
-        chip_client=chip_client,
-        hardware_client=hardware_client,
-        publish=publish,
-        approvals=approvals,
-    )
+    patches = _patch_repo()
+    for p in patches:
+        p.start()
+    try:
+        decision = await approve_pending(
+            approval.approval_id,
+            db,
+            chip_client=chip_client,
+            hardware_client=hardware_client,
+            publish=publish,
+            approvals=approvals,
+        )
+    finally:
+        for p in patches:
+            p.stop()
 
     assert decision.granted is True
     assert hardware_client.door_opens == 1

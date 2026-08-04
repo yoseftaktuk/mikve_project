@@ -1,0 +1,51 @@
+"""Access-attempt saga status constants and transition table."""
+
+from __future__ import annotations
+
+STATUS_CREATED = "CREATED"
+STATUS_VALIDATED = "VALIDATED"
+STATUS_CHARGED = "CHARGED"
+STATUS_DOOR_OPENING = "DOOR_OPENING"
+STATUS_COMPLETED = "COMPLETED"
+STATUS_FAILED = "FAILED"
+STATUS_REFUND_PENDING = "REFUND_PENDING"
+STATUS_REFUNDED = "REFUNDED"
+STATUS_MANUAL_REVIEW = "MANUAL_REVIEW"
+
+METHOD_CHIP = "chip"
+METHOD_FINGERPRINT = "fingerprint"
+METHOD_CASH = "cash"
+
+# Valid (from, to) pairs. Self-transition DOOR_OPENING is allowed for retries.
+VALID_TRANSITIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        (STATUS_CREATED, STATUS_VALIDATED),
+        (STATUS_CREATED, STATUS_FAILED),
+        (STATUS_VALIDATED, STATUS_CHARGED),
+        (STATUS_VALIDATED, STATUS_FAILED),
+        (STATUS_CHARGED, STATUS_DOOR_OPENING),
+        (STATUS_DOOR_OPENING, STATUS_DOOR_OPENING),
+        (STATUS_DOOR_OPENING, STATUS_COMPLETED),
+        (STATUS_DOOR_OPENING, STATUS_FAILED),
+        (STATUS_FAILED, STATUS_REFUND_PENDING),
+        (STATUS_REFUND_PENDING, STATUS_REFUNDED),
+        (STATUS_REFUND_PENDING, STATUS_MANUAL_REVIEW),
+        (STATUS_MANUAL_REVIEW, STATUS_REFUNDED),
+    }
+)
+
+STALE_RESUME_STATUSES = frozenset(
+    {STATUS_CHARGED, STATUS_DOOR_OPENING, STATUS_REFUND_PENDING}
+)
+
+TERMINAL_NO_DOOR = frozenset(
+    {STATUS_COMPLETED, STATUS_REFUNDED, STATUS_MANUAL_REVIEW, STATUS_FAILED}
+)
+
+
+def charge_key(attempt_id: str) -> str:
+    return f"access-charge:{attempt_id}"
+
+
+def refund_key(attempt_id: str) -> str:
+    return f"access-refund:{attempt_id}"

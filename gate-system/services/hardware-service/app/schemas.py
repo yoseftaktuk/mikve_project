@@ -3,6 +3,15 @@ from pydantic import BaseModel, Field
 
 class DoorOpenRequest(BaseModel):
     seconds: int = Field(default=5, ge=1, le=10)
+    operation_id: str | None = Field(default=None, max_length=64)
+    attempt_id: str | None = Field(default=None, max_length=64)
+    correlation_id: str | None = Field(default=None, max_length=64)
+
+
+class DoorOpenResponse(BaseModel):
+    operation_id: str | None = None
+    status: str
+    unlocked_for_seconds: int
 
 
 class SimulateRfidRequest(BaseModel):

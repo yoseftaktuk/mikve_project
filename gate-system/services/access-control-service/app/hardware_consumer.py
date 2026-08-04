@@ -98,6 +98,7 @@ class HardwareEventConsumer:
                         chip_client=self._chip_client,
                         hardware_client=self._hardware_client,
                         publish=self._publish,
+                        cash_session=self._cash_session,
                     )
                 return
 
@@ -112,6 +113,7 @@ class HardwareEventConsumer:
                         cash_session=self._cash_session,
                         hardware_client=self._hardware_client,
                         publish=self._publish,
+                        chip_client=self._chip_client,
                     )
                 return
 
