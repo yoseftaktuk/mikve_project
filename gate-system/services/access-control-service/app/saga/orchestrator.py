@@ -567,62 +567,6 @@ class AccessOrchestrator:
         self, attempt: AccessAttempt, operation_id: uuid.UUID, timeout_s: float
     ) -> str:
         try:
-            # #region agent log
-            import json as _json
-            import time as _time
-            import urllib.request as _ur
-
-            def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
-                payload = {
-                    "sessionId": "a40ac1",
-                    "runId": "pre-fix",
-                    "hypothesisId": hypothesis_id,
-                    "location": location,
-                    "message": message,
-                    "data": data or {},
-                    "timestamp": int(_time.time() * 1000),
-                }
-                logger.info("DEBUG_DOOR %s %s %s", hypothesis_id, message, data or {})
-                line = _json.dumps(payload) + "\n"
-                for path in (
-                    "/Users/natankatz/mikve_project/.cursor/debug-a40ac1.log",
-                    "/app/.cursor-debug-a40ac1.log",
-                ):
-                    try:
-                        with open(path, "a", encoding="utf-8") as f:
-                            f.write(line)
-                    except Exception:
-                        continue
-                body = line.encode()
-                for url in (
-                    "http://host.docker.internal:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-                    "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-                ):
-                    try:
-                        req = _ur.Request(
-                            url,
-                            data=body,
-                            headers={"Content-Type": "application/json", "X-Debug-Session-Id": "a40ac1"},
-                            method="POST",
-                        )
-                        _ur.urlopen(req, timeout=0.5)
-                        break
-                    except Exception:
-                        continue
-
-            _agent_dbg(
-                "C",
-                "orchestrator.py:_call_door",
-                "door_call_start",
-                {
-                    "attempt_id": str(attempt.id),
-                    "operation_id": str(operation_id),
-                    "timeout_s": timeout_s,
-                    "unlock_seconds": settings.door_unlock_seconds,
-                    "door_open_timeout_ms": settings.door_open_timeout_ms,
-                },
-            )
-            # #endregion
             data = await self._hardware.open_door(
                 settings.door_unlock_seconds,
                 operation_id=str(operation_id),
@@ -631,14 +575,6 @@ class AccessOrchestrator:
                 timeout_seconds=timeout_s,
             )
             status = str(data.get("status", "")).lower()
-            # #region agent log
-            _agent_dbg(
-                "C",
-                "orchestrator.py:_call_door",
-                "door_call_ok",
-                {"attempt_id": str(attempt.id), "status": status, "data": data},
-            )
-            # #endregion
             if status == DOOR_CONFIRMED:
                 return DOOR_CONFIRMED
             return DOOR_REJECTED
@@ -646,14 +582,7 @@ class AccessOrchestrator:
             return DOOR_UNAVAILABLE
         except DoorRejectedError:
             return DOOR_REJECTED
-        except Exception as exc:
-            # #region agent log
-            logger.info(
-                "DEBUG_DOOR B door_call_exception attempt_id=%s exc_type=%s mapped_to=timeout",
-                attempt.id,
-                type(exc).__name__,
-            )
-            # #endregion
+        except Exception:
             logger.exception("door_call_failed attempt_id=%s", attempt.id)
             return DOOR_TIMEOUT
 

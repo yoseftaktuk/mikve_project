@@ -60,6 +60,21 @@ async def on_rfid_scan(uid: str) -> None:
 
 async def on_cash_inserted(amount_cents: int) -> None:
     """Publish a cash.inserted event when a coin is accepted."""
+    # #region agent log
+    logger.info(
+        "AGENT_DEBUG %s",
+        json.dumps(
+            {
+                "sessionId": "8d1e46",
+                "hypothesisId": "C",
+                "location": "main.py:on_cash_inserted",
+                "message": "publishing_cash_inserted",
+                "data": {"amount_cents": amount_cents},
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            }
+        ),
+    )
+    # #endregion
     await _publish(
         "hardware.events",
         {
@@ -160,13 +175,19 @@ async def healthz():
 async def get_status():
     """Return whether RFID, coin acceptor, and door relay are connected."""
     st = await adapter.get_status()
-    return {
+    payload = {
         "mode": st.mode,
         "rfid_reader_connected": st.rfid_reader_connected,
         "coin_acceptor_connected": st.coin_acceptor_connected,
         "door_relay_connected": st.door_relay_connected,
         "fingerprint_reader_connected": st.fingerprint_reader_connected,
     }
+    # #region agent log
+    get_coin_debug = getattr(adapter, "get_coin_debug", None)
+    if callable(get_coin_debug):
+        payload["coin_debug"] = get_coin_debug()
+    # #endregion
+    return payload
 
 
 async def _open_door_task(seconds: int, *, operation_id: str | None = None, attempt_id: str | None = None) -> None:
@@ -205,78 +226,9 @@ async def open_door(req: DoorOpenRequest):
     walked through. Optional operation_id / attempt_id are echoed for saga correlation.
     """
     seconds = req.seconds or settings.door_unlock_seconds
-    # #region agent log
-    import json as _json
-    import time as _time
-    import urllib.request as _ur
-
-    def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
-        payload = {
-            "sessionId": "a40ac1",
-            "runId": "pre-fix",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(_time.time() * 1000),
-        }
-        logger.info("DEBUG_DOOR %s %s %s", hypothesis_id, message, data or {})
-        line = _json.dumps(payload) + "\n"
-        for path in (
-            "/Users/natankatz/mikve_project/.cursor/debug-a40ac1.log",
-            "/app/.cursor-debug-a40ac1.log",
-        ):
-            try:
-                with open(path, "a", encoding="utf-8") as f:
-                    f.write(line)
-            except Exception:
-                continue
-        body = line.encode()
-        for url in (
-            "http://host.docker.internal:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-            "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-        ):
-            try:
-                req_dbg = _ur.Request(
-                    url,
-                    data=body,
-                    headers={"Content-Type": "application/json", "X-Debug-Session-Id": "a40ac1"},
-                    method="POST",
-                )
-                _ur.urlopen(req_dbg, timeout=0.5)
-                break
-            except Exception:
-                continue
-
-    t0 = _time.monotonic()
-    _agent_dbg(
-        "E",
-        "hardware/main.py:open_door",
-        "door_open_enter",
-        {
-            "seconds": seconds,
-            "operation_id": req.operation_id,
-            "attempt_id": req.attempt_id,
-            "adapter": type(adapter).__name__ if adapter is not None else None,
-            "hardware_mode": settings.hardware_mode,
-        },
-    )
-    # #endregion
     if adapter is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="door_unavailable")
     st = await adapter.get_status()
-    # #region agent log
-    _agent_dbg(
-        "E",
-        "hardware/main.py:open_door",
-        "door_open_after_status",
-        {
-            "door_relay_connected": st.door_relay_connected,
-            "mode": st.mode,
-            "elapsed_s": round(_time.monotonic() - t0, 3),
-        },
-    )
-    # #endregion
     if not st.door_relay_connected:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="door_unavailable")
 
@@ -285,19 +237,6 @@ async def open_door(req: DoorOpenRequest):
     asyncio.create_task(
         _open_door_task(seconds, operation_id=req.operation_id, attempt_id=req.attempt_id)
     )
-
-    # #region agent log
-    _agent_dbg(
-        "A",
-        "hardware/main.py:open_door",
-        "door_open_returning_confirmed",
-        {
-            "elapsed_s": round(_time.monotonic() - t0, 3),
-            "mode": "background",
-            "operation_id": req.operation_id,
-        },
-    )
-    # #endregion
 
     return DoorOpenResponse(
         operation_id=req.operation_id,

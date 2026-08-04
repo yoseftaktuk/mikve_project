@@ -242,6 +242,12 @@ class RpiHardwareAdapter(HardwareAdapter):
             fingerprint_reader_connected=fingerprint_ready,
         )
 
+    def get_coin_debug(self) -> dict:
+        """Return live coin-pulse counters when GPIO is running."""
+        if self._gpio is None:
+            return {"gpio": None}
+        return self._gpio.debug_coin_stats()
+
     async def open_door(self, *, seconds: int) -> None:
         """Float the door pin (like unplugging IN1) for the given seconds."""
         if self._gpio is None:
