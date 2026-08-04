@@ -399,6 +399,56 @@ class RpiGpioController:
         return result
         # #endregion
 
+    def selftest_coin_pin(self) -> dict[str, Any]:
+        """Verify pull-up/down on the coin pin (SIG wire should be disconnected)."""
+        # #region agent log
+        if GPIO is None or not self._gpio_ready:
+            return {"error": "gpio_not_ready"}
+
+        gpio_name = getattr(GPIO, "__name__", type(GPIO).__name__)
+        steps: dict[str, Any] = {
+            "coin_pin_bcm": self._coin_pin,
+            "physical_pin_hint": "BCM17 = header pin 11",
+            "gpio_module": gpio_name,
+        }
+        try:
+            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            time.sleep(0.05)
+            steps["after_pud_up"] = int(GPIO.input(self._coin_pin))
+
+            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+            time.sleep(0.05)
+            steps["after_pud_down"] = int(GPIO.input(self._coin_pin))
+
+            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            time.sleep(0.05)
+            steps["after_pud_up_again"] = int(GPIO.input(self._coin_pin))
+
+            # Restore event detect used by the coin listener.
+            try:
+                GPIO.remove_event_detect(self._coin_pin)
+            except Exception:  # noqa: BLE001 - debug only
+                pass
+            GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
+        except Exception as exc:  # noqa: BLE001 - debug only
+            steps["error"] = f"{type(exc).__name__}: {exc}"
+
+        up = steps.get("after_pud_up")
+        down = steps.get("after_pud_down")
+        up2 = steps.get("after_pud_up_again")
+        if up == 1 and down == 0 and up2 == 1:
+            steps["verdict"] = "pull_ok_pin_floating"
+        elif up == 0 and down == 0 and up2 == 0:
+            steps["verdict"] = "stuck_low_short_or_wrong_pin_or_dead_gpio"
+        elif up == 1 and down == 1 and up2 == 1:
+            steps["verdict"] = "stuck_high_driven_or_pull_down_ignored"
+        else:
+            steps["verdict"] = "unexpected_pull_behavior"
+
+        _agent_log("I", "rpi_gpio.py:selftest_coin_pin", "coin_pin_selftest", steps)
+        return steps
+        # #endregion
+
     def _get_coin_if_ready(self) -> float | None:
         """Return shekel value once pulse bursts settle (~200ms quiet)."""
         with self._coin_lock:

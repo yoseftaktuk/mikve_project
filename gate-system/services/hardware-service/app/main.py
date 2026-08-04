@@ -202,6 +202,17 @@ async def debug_coin_sample(duration_s: float = 5.0):
     # #endregion
 
 
+@app.post("/debug/coin-pin-selftest")
+async def debug_coin_pin_selftest():
+    """Pull-up/down self-test; SIG wire should be disconnected (debug only)."""
+    # #region agent log
+    selftest_fn = getattr(adapter, "selftest_coin_pin", None)
+    if not callable(selftest_fn):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="coin selftest unavailable")
+    return await selftest_fn()
+    # #endregion
+
+
 async def _open_door_task(seconds: int, *, operation_id: str | None = None, attempt_id: str | None = None) -> None:
     """Unlock the door for the given seconds and publish door.opened."""
     try:
