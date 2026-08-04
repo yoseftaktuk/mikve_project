@@ -190,6 +190,18 @@ async def get_status():
     return payload
 
 
+@app.post("/debug/coin-sample")
+async def debug_coin_sample(duration_s: float = 5.0):
+    """Busy-sample the coin pin while a coin is inserted (debug only)."""
+    # #region agent log
+    sample_fn = getattr(adapter, "sample_coin_pin", None)
+    if not callable(sample_fn):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="coin sampling unavailable")
+    result = await sample_fn(duration_s)
+    return result
+    # #endregion
+
+
 async def _open_door_task(seconds: int, *, operation_id: str | None = None, attempt_id: str | None = None) -> None:
     """Unlock the door for the given seconds and publish door.opened."""
     try:

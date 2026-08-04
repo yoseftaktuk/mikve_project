@@ -353,6 +353,52 @@ class RpiGpioController:
         }
         # #endregion
 
+    def sample_coin_pin(self, duration_s: float = 5.0) -> dict[str, Any]:
+        """Busy-sample the coin pin to detect any level changes during insertion."""
+        # #region agent log
+        if GPIO is None or not self._gpio_ready:
+            return {"error": "gpio_not_ready"}
+
+        duration_s = max(0.5, min(duration_s, 10.0))
+        start_pulses = self._debug_total_pulses
+        start = time.time()
+        samples = 0
+        highs = 0
+        lows = 0
+        falling = 0
+        rising = 0
+        prev: int | None = None
+        while time.time() - start < duration_s:
+            level = int(GPIO.input(self._coin_pin))
+            samples += 1
+            if level:
+                highs += 1
+            else:
+                lows += 1
+            if prev is not None and level != prev:
+                if prev == 1 and level == 0:
+                    falling += 1
+                elif prev == 0 and level == 1:
+                    rising += 1
+            prev = level
+            time.sleep(0.0005)
+
+        result = {
+            "duration_s": round(time.time() - start, 3),
+            "coin_pin": self._coin_pin,
+            "samples": samples,
+            "highs": highs,
+            "lows": lows,
+            "falling_edges": falling,
+            "rising_edges": rising,
+            "event_pulses_during_sample": self._debug_total_pulses - start_pulses,
+            "final_level": prev,
+            "stats_after": self.debug_coin_stats(),
+        }
+        _agent_log("E", "rpi_gpio.py:sample_coin_pin", "coin_pin_sample", result)
+        return result
+        # #endregion
+
     def _get_coin_if_ready(self) -> float | None:
         """Return shekel value once pulse bursts settle (~200ms quiet)."""
         with self._coin_lock:
