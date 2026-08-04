@@ -213,6 +213,17 @@ async def debug_coin_pin_selftest():
     # #endregion
 
 
+@app.post("/debug/gpio-probe")
+async def debug_gpio_probe():
+    """Find healthy floating BCM pins for coin SIG (debug only)."""
+    # #region agent log
+    probe_fn = getattr(adapter, "probe_input_pins", None)
+    if not callable(probe_fn):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="gpio probe unavailable")
+    return await probe_fn()
+    # #endregion
+
+
 async def _open_door_task(seconds: int, *, operation_id: str | None = None, attempt_id: str | None = None) -> None:
     """Unlock the door for the given seconds and publish door.opened."""
     try:

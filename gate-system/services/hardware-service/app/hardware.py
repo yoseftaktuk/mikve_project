@@ -260,6 +260,12 @@ class RpiHardwareAdapter(HardwareAdapter):
             return {"error": "gpio_not_ready"}
         return await asyncio.to_thread(self._gpio.selftest_coin_pin)
 
+    async def probe_input_pins(self) -> dict:
+        """Probe alternate BCM pins for a healthy floating-high input."""
+        if self._gpio is None:
+            return {"error": "gpio_not_ready"}
+        return await asyncio.to_thread(self._gpio.probe_input_pins)
+
     async def open_door(self, *, seconds: int) -> None:
         """Float the door pin (like unplugging IN1) for the given seconds."""
         if self._gpio is None:

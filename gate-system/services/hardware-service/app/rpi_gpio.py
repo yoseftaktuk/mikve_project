@@ -449,6 +449,50 @@ class RpiGpioController:
         return steps
         # #endregion
 
+    def probe_input_pins(self, pins: list[int] | None = None) -> dict[str, Any]:
+        """Probe candidate BCM pins with PUD_UP (nothing should be connected)."""
+        # #region agent log
+        if GPIO is None or not self._gpio_ready:
+            return {"error": "gpio_not_ready"}
+
+        candidates = pins or [5, 6, 13, 16, 19, 20, 21, 26, 27]
+        # Never disturb the door relay pin mid-probe.
+        candidates = [p for p in candidates if p != self._door_pin]
+        results: dict[str, Any] = {
+            "door_pin_skipped": self._door_pin,
+            "current_coin_pin": self._coin_pin,
+            "pins": {},
+        }
+        healthy: list[int] = []
+        for pin in candidates:
+            try:
+                GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                time.sleep(0.02)
+                level = int(GPIO.input(pin))
+                entry = {"after_pud_up": level, "ok_floating_high": level == 1}
+                results["pins"][str(pin)] = entry
+                if level == 1:
+                    healthy.append(pin)
+            except Exception as exc:  # noqa: BLE001 - debug only
+                results["pins"][str(pin)] = {"error": f"{type(exc).__name__}: {exc}"}
+
+        # Restore coin pin listener configuration.
+        try:
+            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            try:
+                GPIO.remove_event_detect(self._coin_pin)
+            except Exception:  # noqa: BLE001 - debug only
+                pass
+            GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
+        except Exception as exc:  # noqa: BLE001 - debug only
+            results["restore_coin_pin_error"] = f"{type(exc).__name__}: {exc}"
+
+        results["healthy_bcm_pins"] = healthy
+        results["recommendation"] = healthy[0] if healthy else None
+        _agent_log("J", "rpi_gpio.py:probe_input_pins", "gpio_pin_probe", results)
+        return results
+        # #endregion
+
     def _get_coin_if_ready(self) -> float | None:
         """Return shekel value once pulse bursts settle (~200ms quiet)."""
         with self._coin_lock:
