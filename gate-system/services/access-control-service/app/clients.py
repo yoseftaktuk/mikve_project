@@ -1,10 +1,59 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import logging
+import time
+import urllib.request
 
 import httpx
 
 from .settings import settings
+
+logger = logging.getLogger(__name__)
+
+
+# #region agent log
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
+    payload = {
+        "sessionId": "a40ac1",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data or {},
+        "timestamp": int(time.time() * 1000),
+    }
+    logger.info("DEBUG_DOOR %s %s %s", hypothesis_id, message, data or {})
+    line = json.dumps(payload) + "\n"
+    for path in (
+        "/Users/natankatz/mikve_project/.cursor/debug-a40ac1.log",
+        "/app/.cursor-debug-a40ac1.log",
+    ):
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            continue
+    body = line.encode()
+    for url in (
+        "http://host.docker.internal:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
+        "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
+    ):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json", "X-Debug-Session-Id": "a40ac1"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=0.5)
+            break
+        except Exception:
+            continue
+
+
+# #endregion
 
 
 class HardwareUnavailableError(Exception):
@@ -113,8 +162,52 @@ class HardwareClient:
         if correlation_id:
             body["correlation_id"] = correlation_id
         timeout = timeout_seconds if timeout_seconds is not None else 5.0
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(f"{self._base}/door/open", json=body)
+        # #region agent log
+        t0 = time.monotonic()
+        _agent_dbg(
+            "C",
+            "clients.py:open_door",
+            "http_door_request_start",
+            {
+                "url": f"{self._base}/door/open",
+                "timeout_s": timeout,
+                "seconds": seconds,
+                "operation_id": operation_id,
+                "attempt_id": attempt_id,
+            },
+        )
+        # #endregion
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(f"{self._base}/door/open", json=body)
+        except Exception as exc:
+            # #region agent log
+            _agent_dbg(
+                "A",
+                "clients.py:open_door",
+                "http_door_request_failed",
+                {
+                    "url": f"{self._base}/door/open",
+                    "timeout_s": timeout,
+                    "elapsed_s": round(time.monotonic() - t0, 3),
+                    "exc_type": type(exc).__name__,
+                    "exc": str(exc)[:200],
+                },
+            )
+            # #endregion
+            raise
+        # #region agent log
+        _agent_dbg(
+            "C",
+            "clients.py:open_door",
+            "http_door_request_ok",
+            {
+                "status_code": resp.status_code,
+                "elapsed_s": round(time.monotonic() - t0, 3),
+                "body_preview": (resp.text or "")[:200],
+            },
+        )
+        # #endregion
         if resp.status_code == 204:
             return {"status": "confirmed", "unlocked_for_seconds": seconds, "operation_id": operation_id}
         if resp.status_code == 503:
