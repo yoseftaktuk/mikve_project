@@ -1,63 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-# #region agent log
-_AGENT_DEBUG_ENDPOINTS = (
-    "http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-    "http://192.168.150.196:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-)
-_AGENT_DEBUG_LOG_PATH = "/Users/natankatz/mikve_project/.cursor/debug-8d1e46.log"
-
-
-def _agent_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any] | None = None) -> None:
-    """Emit one NDJSON debug line (logger + best-effort HTTP/file)."""
-    payload = {
-        "sessionId": "8d1e46",
-        "runId": "coin-pre",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data or {},
-        "timestamp": int(time.time() * 1000),
-    }
-    logger.info("AGENT_DEBUG %s", json.dumps(payload, default=str))
-    line = json.dumps(payload, default=str) + "\n"
-    try:
-        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(line)
-    except OSError:
-        pass
-    body = line.encode("utf-8")
-    for url in _AGENT_DEBUG_ENDPOINTS:
-        try:
-            req = urllib.request.Request(
-                url,
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Debug-Session-Id": "8d1e46",
-                },
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=0.4)
-            break
-        except (urllib.error.URLError, TimeoutError, OSError):
-            continue
-
-
-# #endregion
 
 try:
     import RPi.GPIO as GPIO  # type: ignore[import-untyped]
@@ -119,17 +70,6 @@ class RpiGpioController:
         self._door_lock = threading.Lock()
         self._gpio_ready = False
         self._rfid_connected = False
-        # #region agent log
-        self._debug_total_pulses = 0
-        self._debug_bursts = 0
-        self._debug_mapped = 0
-        self._debug_unknown = 0
-        self._debug_last_burst_pulses: int | None = None
-        self._debug_last_shekels: float | None = None
-        self._debug_last_unknown_pulses: int | None = None
-        self._debug_last_pin_level: int | None = None
-        self._debug_last_pulse_at: str | None = None
-        # #endregion
 
     @property
     def _door_idle_level(self) -> int:
@@ -230,32 +170,6 @@ class RpiGpioController:
 
         GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
         self._gpio_ready = True
-        # #region agent log
-        try:
-            pin_level = int(GPIO.input(self._coin_pin))
-        except Exception as exc:  # noqa: BLE001 - debug only
-            pin_level = None
-            _agent_log(
-                "A",
-                "rpi_gpio.py:start",
-                "gpio_started_pin_read_failed",
-                {"coin_pin": self._coin_pin, "error": f"{type(exc).__name__}: {exc}"},
-            )
-        else:
-            self._debug_last_pin_level = pin_level
-            _agent_log(
-                "A",
-                "rpi_gpio.py:start",
-                "gpio_started",
-                {
-                    "coin_pin": self._coin_pin,
-                    "door_pin": self._door_pin,
-                    "pin_level": pin_level,
-                    "edge": "FALLING",
-                    "pull": "PUD_UP",
-                },
-            )
-        # #endregion
         logger.info(
             "gpio_started coin_pin=%s door_pin=%s door_idle=%s unlock_mode=float",
             self._coin_pin,
@@ -309,189 +223,6 @@ class RpiGpioController:
         with self._coin_lock:
             self._coin_count += 1
             self._last_pulse_time = datetime.now()
-            # #region agent log
-            self._debug_total_pulses += 1
-            total = self._debug_total_pulses
-            burst = self._coin_count
-            self._debug_last_pulse_at = self._last_pulse_time.isoformat(timespec="milliseconds")
-            # #endregion
-        # #region agent log
-        if total <= 30 or total % 25 == 0:
-            _agent_log(
-                "A",
-                "rpi_gpio.py:_pulse_detected",
-                "coin_pulse",
-                {"total_pulses": total, "burst_count": burst, "coin_pin": self._coin_pin},
-            )
-        # #endregion
-
-    def debug_coin_stats(self) -> dict[str, Any]:
-        """Return live coin-pulse counters for /status debugging."""
-        # #region agent log
-        pin_level = self._debug_last_pin_level
-        if GPIO is not None and self._gpio_ready:
-            try:
-                pin_level = int(GPIO.input(self._coin_pin))
-                self._debug_last_pin_level = pin_level
-            except Exception:  # noqa: BLE001 - debug only
-                pass
-        with self._coin_lock:
-            pending = self._coin_count
-            last_pulse = self._debug_last_pulse_at
-        return {
-            "coin_pin": self._coin_pin,
-            "pin_level": pin_level,
-            "pending_pulses": pending,
-            "total_pulses": self._debug_total_pulses,
-            "bursts": self._debug_bursts,
-            "mapped": self._debug_mapped,
-            "unknown": self._debug_unknown,
-            "last_burst_pulses": self._debug_last_burst_pulses,
-            "last_shekels": self._debug_last_shekels,
-            "last_unknown_pulses": self._debug_last_unknown_pulses,
-            "last_pulse_at": last_pulse,
-        }
-        # #endregion
-
-    def sample_coin_pin(self, duration_s: float = 5.0) -> dict[str, Any]:
-        """Busy-sample the coin pin to detect any level changes during insertion."""
-        # #region agent log
-        if GPIO is None or not self._gpio_ready:
-            return {"error": "gpio_not_ready"}
-
-        duration_s = max(0.5, min(duration_s, 10.0))
-        start_pulses = self._debug_total_pulses
-        start = time.time()
-        samples = 0
-        highs = 0
-        lows = 0
-        falling = 0
-        rising = 0
-        prev: int | None = None
-        while time.time() - start < duration_s:
-            level = int(GPIO.input(self._coin_pin))
-            samples += 1
-            if level:
-                highs += 1
-            else:
-                lows += 1
-            if prev is not None and level != prev:
-                if prev == 1 and level == 0:
-                    falling += 1
-                elif prev == 0 and level == 1:
-                    rising += 1
-            prev = level
-            time.sleep(0.0005)
-
-        result = {
-            "duration_s": round(time.time() - start, 3),
-            "coin_pin": self._coin_pin,
-            "samples": samples,
-            "highs": highs,
-            "lows": lows,
-            "falling_edges": falling,
-            "rising_edges": rising,
-            "event_pulses_during_sample": self._debug_total_pulses - start_pulses,
-            "final_level": prev,
-            "stats_after": self.debug_coin_stats(),
-        }
-        _agent_log("E", "rpi_gpio.py:sample_coin_pin", "coin_pin_sample", result)
-        return result
-        # #endregion
-
-    def selftest_coin_pin(self) -> dict[str, Any]:
-        """Verify pull-up/down on the coin pin (SIG wire should be disconnected)."""
-        # #region agent log
-        if GPIO is None or not self._gpio_ready:
-            return {"error": "gpio_not_ready"}
-
-        gpio_name = getattr(GPIO, "__name__", type(GPIO).__name__)
-        steps: dict[str, Any] = {
-            "coin_pin_bcm": self._coin_pin,
-            "physical_pin_hint": "BCM17 = header pin 11",
-            "gpio_module": gpio_name,
-        }
-        try:
-            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            time.sleep(0.05)
-            steps["after_pud_up"] = int(GPIO.input(self._coin_pin))
-
-            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-            time.sleep(0.05)
-            steps["after_pud_down"] = int(GPIO.input(self._coin_pin))
-
-            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            time.sleep(0.05)
-            steps["after_pud_up_again"] = int(GPIO.input(self._coin_pin))
-
-            # Restore event detect used by the coin listener.
-            try:
-                GPIO.remove_event_detect(self._coin_pin)
-            except Exception:  # noqa: BLE001 - debug only
-                pass
-            GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
-        except Exception as exc:  # noqa: BLE001 - debug only
-            steps["error"] = f"{type(exc).__name__}: {exc}"
-
-        up = steps.get("after_pud_up")
-        down = steps.get("after_pud_down")
-        up2 = steps.get("after_pud_up_again")
-        if up == 1 and down == 0 and up2 == 1:
-            steps["verdict"] = "pull_ok_pin_floating"
-        elif up == 0 and down == 0 and up2 == 0:
-            steps["verdict"] = "stuck_low_short_or_wrong_pin_or_dead_gpio"
-        elif up == 1 and down == 1 and up2 == 1:
-            steps["verdict"] = "stuck_high_driven_or_pull_down_ignored"
-        else:
-            steps["verdict"] = "unexpected_pull_behavior"
-
-        _agent_log("I", "rpi_gpio.py:selftest_coin_pin", "coin_pin_selftest", steps)
-        return steps
-        # #endregion
-
-    def probe_input_pins(self, pins: list[int] | None = None) -> dict[str, Any]:
-        """Probe candidate BCM pins with PUD_UP (nothing should be connected)."""
-        # #region agent log
-        if GPIO is None or not self._gpio_ready:
-            return {"error": "gpio_not_ready"}
-
-        candidates = pins or [5, 6, 13, 16, 19, 20, 21, 26, 27]
-        # Never disturb the door relay pin mid-probe.
-        candidates = [p for p in candidates if p != self._door_pin]
-        results: dict[str, Any] = {
-            "door_pin_skipped": self._door_pin,
-            "current_coin_pin": self._coin_pin,
-            "pins": {},
-        }
-        healthy: list[int] = []
-        for pin in candidates:
-            try:
-                GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-                time.sleep(0.02)
-                level = int(GPIO.input(pin))
-                entry = {"after_pud_up": level, "ok_floating_high": level == 1}
-                results["pins"][str(pin)] = entry
-                if level == 1:
-                    healthy.append(pin)
-            except Exception as exc:  # noqa: BLE001 - debug only
-                results["pins"][str(pin)] = {"error": f"{type(exc).__name__}: {exc}"}
-
-        # Restore coin pin listener configuration.
-        try:
-            GPIO.setup(self._coin_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            try:
-                GPIO.remove_event_detect(self._coin_pin)
-            except Exception:  # noqa: BLE001 - debug only
-                pass
-            GPIO.add_event_detect(self._coin_pin, GPIO.FALLING, callback=self._pulse_detected, bouncetime=5)
-        except Exception as exc:  # noqa: BLE001 - debug only
-            results["restore_coin_pin_error"] = f"{type(exc).__name__}: {exc}"
-
-        results["healthy_bcm_pins"] = healthy
-        results["recommendation"] = healthy[0] if healthy else None
-        _agent_log("J", "rpi_gpio.py:probe_input_pins", "gpio_pin_probe", results)
-        return results
-        # #endregion
 
     def _get_coin_if_ready(self) -> float | None:
         """Return shekel value once pulse bursts settle (~200ms quiet)."""
@@ -507,81 +238,18 @@ class RpiGpioController:
             self._coin_count = 0
             self._last_pulse_time = None
 
-        # #region agent log
-        self._debug_bursts += 1
-        self._debug_last_burst_pulses = pulses
-        # #endregion
         shekels = pulses_to_shekels(pulses)
         if shekels is None:
-            # #region agent log
-            self._debug_unknown += 1
-            self._debug_last_unknown_pulses = pulses
-            _agent_log(
-                "B",
-                "rpi_gpio.py:_get_coin_if_ready",
-                "unknown_coin_pulses",
-                {"pulses": pulses, "bursts": self._debug_bursts, "unknown": self._debug_unknown},
-            )
-            # #endregion
             return None
-        # #region agent log
-        self._debug_mapped += 1
-        self._debug_last_shekels = shekels
-        _agent_log(
-            "B",
-            "rpi_gpio.py:_get_coin_if_ready",
-            "coin_mapped",
-            {"pulses": pulses, "shekels": shekels, "mapped": self._debug_mapped},
-        )
-        # #endregion
         logger.info("coin_detected pulses=%s shekels=%s", pulses, shekels)
         return shekels
 
     def _poll_loop(self) -> None:
         """Poll for completed coins and invoke the cash callback."""
-        # #region agent log
-        last_level_log = 0.0
-        idle_samples = 0
-        # #endregion
         while not self._stop.is_set():
             try:
-                # #region agent log
-                now = time.time()
-                if (
-                    idle_samples < 8
-                    and now - last_level_log >= 5.0
-                    and GPIO is not None
-                    and self._gpio_ready
-                ):
-                    try:
-                        level = int(GPIO.input(self._coin_pin))
-                        self._debug_last_pin_level = level
-                        if self._debug_total_pulses == 0:
-                            _agent_log(
-                                "A",
-                                "rpi_gpio.py:_poll_loop",
-                                "coin_pin_idle_sample",
-                                {
-                                    "coin_pin": self._coin_pin,
-                                    "pin_level": level,
-                                    "total_pulses": 0,
-                                },
-                            )
-                            idle_samples += 1
-                    except Exception:  # noqa: BLE001 - debug only
-                        pass
-                    last_level_log = now
-                # #endregion
                 shekels = self._get_coin_if_ready()
                 if shekels is not None:
-                    # #region agent log
-                    _agent_log(
-                        "C",
-                        "rpi_gpio.py:_poll_loop",
-                        "cash_callback_scheduled",
-                        {"shekels": shekels},
-                    )
-                    # #endregion
                     asyncio.run_coroutine_threadsafe(self._on_cash_shekels(shekels), self._loop)
             except Exception:
                 logger.exception("coin_poll_error")

@@ -242,30 +242,6 @@ class RpiHardwareAdapter(HardwareAdapter):
             fingerprint_reader_connected=fingerprint_ready,
         )
 
-    def get_coin_debug(self) -> dict:
-        """Return live coin-pulse counters when GPIO is running."""
-        if self._gpio is None:
-            return {"gpio": None}
-        return self._gpio.debug_coin_stats()
-
-    async def sample_coin_pin(self, duration_s: float = 5.0) -> dict:
-        """Sample the coin GPIO pin for level transitions (debug)."""
-        if self._gpio is None:
-            return {"error": "gpio_not_ready"}
-        return await asyncio.to_thread(self._gpio.sample_coin_pin, duration_s)
-
-    async def selftest_coin_pin(self) -> dict:
-        """Run pull-up/down self-test on the coin pin (debug)."""
-        if self._gpio is None:
-            return {"error": "gpio_not_ready"}
-        return await asyncio.to_thread(self._gpio.selftest_coin_pin)
-
-    async def probe_input_pins(self) -> dict:
-        """Probe alternate BCM pins for a healthy floating-high input."""
-        if self._gpio is None:
-            return {"error": "gpio_not_ready"}
-        return await asyncio.to_thread(self._gpio.probe_input_pins)
-
     async def open_door(self, *, seconds: int) -> None:
         """Float the door pin (like unplugging IN1) for the given seconds."""
         if self._gpio is None:

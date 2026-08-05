@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 
 import redis.asyncio as redis
 
@@ -105,43 +104,6 @@ class HardwareEventConsumer:
 
             if event_type == "cash.inserted":
                 amount_cents = event.get("amount_cents")
-                # #region agent log
-                _dbg = {
-                    "sessionId": "8d1e46",
-                    "runId": "coin-pre",
-                    "hypothesisId": "D",
-                    "location": "hardware_consumer.py:_handle",
-                    "message": "cash_inserted_received",
-                    "data": {"amount_cents": amount_cents},
-                    "timestamp": int(time.time() * 1000),
-                }
-                logger.info("AGENT_DEBUG %s", json.dumps(_dbg))
-                try:
-                    import urllib.request
-
-                    for _url in (
-                        "http://host.docker.internal:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-                        "http://192.168.150.196:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358",
-                    ):
-                        try:
-                            urllib.request.urlopen(
-                                urllib.request.Request(
-                                    _url,
-                                    data=json.dumps(_dbg).encode("utf-8"),
-                                    headers={
-                                        "Content-Type": "application/json",
-                                        "X-Debug-Session-Id": "8d1e46",
-                                    },
-                                    method="POST",
-                                ),
-                                timeout=0.4,
-                            )
-                            break
-                        except Exception:  # noqa: BLE001 - debug only
-                            continue
-                except Exception:  # noqa: BLE001 - debug only
-                    pass
-                # #endregion
                 if amount_cents is None:
                     return
                 async with SessionLocal() as db:

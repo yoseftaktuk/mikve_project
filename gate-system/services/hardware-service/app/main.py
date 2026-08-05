@@ -60,21 +60,6 @@ async def on_rfid_scan(uid: str) -> None:
 
 async def on_cash_inserted(amount_cents: int) -> None:
     """Publish a cash.inserted event when a coin is accepted."""
-    # #region agent log
-    logger.info(
-        "AGENT_DEBUG %s",
-        json.dumps(
-            {
-                "sessionId": "8d1e46",
-                "hypothesisId": "C",
-                "location": "main.py:on_cash_inserted",
-                "message": "publishing_cash_inserted",
-                "data": {"amount_cents": amount_cents},
-                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-            }
-        ),
-    )
-    # #endregion
     await _publish(
         "hardware.events",
         {
@@ -175,53 +160,13 @@ async def healthz():
 async def get_status():
     """Return whether RFID, coin acceptor, and door relay are connected."""
     st = await adapter.get_status()
-    payload = {
+    return {
         "mode": st.mode,
         "rfid_reader_connected": st.rfid_reader_connected,
         "coin_acceptor_connected": st.coin_acceptor_connected,
         "door_relay_connected": st.door_relay_connected,
         "fingerprint_reader_connected": st.fingerprint_reader_connected,
     }
-    # #region agent log
-    get_coin_debug = getattr(adapter, "get_coin_debug", None)
-    if callable(get_coin_debug):
-        payload["coin_debug"] = get_coin_debug()
-    # #endregion
-    return payload
-
-
-@app.post("/debug/coin-sample")
-async def debug_coin_sample(duration_s: float = 5.0):
-    """Busy-sample the coin pin while a coin is inserted (debug only)."""
-    # #region agent log
-    sample_fn = getattr(adapter, "sample_coin_pin", None)
-    if not callable(sample_fn):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="coin sampling unavailable")
-    result = await sample_fn(duration_s)
-    return result
-    # #endregion
-
-
-@app.post("/debug/coin-pin-selftest")
-async def debug_coin_pin_selftest():
-    """Pull-up/down self-test; SIG wire should be disconnected (debug only)."""
-    # #region agent log
-    selftest_fn = getattr(adapter, "selftest_coin_pin", None)
-    if not callable(selftest_fn):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="coin selftest unavailable")
-    return await selftest_fn()
-    # #endregion
-
-
-@app.post("/debug/gpio-probe")
-async def debug_gpio_probe():
-    """Find healthy floating BCM pins for coin SIG (debug only)."""
-    # #region agent log
-    probe_fn = getattr(adapter, "probe_input_pins", None)
-    if not callable(probe_fn):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="gpio probe unavailable")
-    return await probe_fn()
-    # #endregion
 
 
 async def _open_door_task(seconds: int, *, operation_id: str | None = None, attempt_id: str | None = None) -> None:
