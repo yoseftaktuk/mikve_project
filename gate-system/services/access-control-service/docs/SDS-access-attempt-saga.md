@@ -34,7 +34,7 @@ Logical roles map onto existing deployables:
 |--------------|----------------|---------------|
 | AccessOrchestrator (Saga) | Create attempt, drive state machine, retries, compensation | `access-control-service` |
 | AccessAttemptRepository | Persist attempts + CAS transitions | Postgres `access_control` |
-| LedgerPort | Idempotent chip/FP balance charge & refund | `chip-service` via HTTP adapter |
+| LedgerPort | Idempotent chip/FP balance charge & refund | `fingerprints-service` via HTTP adapter |
 | CashSessionPort | Atomic cash take / best-effort restore | In-process over redesigned `CashSession` |
 | CashReceiptPort | Issue staff-redeemable receipt | New module in ACS |
 | DoorPort | Open door; wait for confirmation | `hardware-service` (API upgrade) |
@@ -51,7 +51,7 @@ flowchart LR
     Receipt[CashReceiptService]
     Notify[NotificationAdapter]
   end
-  Chip[chip-service]
+  Chip[fingerprints-service]
   Hw[hardware-service]
   Orch --> Repo
   Orch --> Audit
@@ -119,7 +119,7 @@ Retries: up to `DOOR_MAX_RETRIES`, delay `DOOR_RETRY_DELAY_MS`, each try audited
 | Charge | `access-charge:{attempt_id}` |
 | Refund | `access-refund:{attempt_id}` |
 
-`chip-service` unique index on `chip_activity.idempotency_key` returns current balance on replay without a second debit/credit.
+`fingerprints-service` unique index on `chip_activity.idempotency_key` returns current balance on replay without a second debit/credit.
 
 ACS also stores `payment_transactions` / `refund_transactions` with UNIQUE `idempotency_key` and CAS so concurrent workers do not double-call.
 

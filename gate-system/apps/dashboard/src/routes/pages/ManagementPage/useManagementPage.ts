@@ -1,35 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../../app/api'
 import { managementApi } from '../../../app/managementApi'
-import { formatMoney, parseShekelsToCents } from '../../../app/money'
 import { useManagementAuth } from '../../../hooks/useManagementAuth'
 
 type GateStatus = {
   door_unlock_seconds: number
 }
 
-type ChipInfo = {
-  uid: string
-  chip_id: string
-  balance_cents: number
-  is_enabled: boolean
-  holder_name?: string | null
-}
-
-type TopupResult = {
-  uid: string
-  chip_id: string
-  balance_cents: number
-  added_cents: number
-}
-
-/** Management auth, chip lookup/top-up, and manual door controls. */
+/** Management auth and manual door controls. */
 export function useManagementPage() {
   const { authenticated, pin, setPin, pinError, pinLoading, onPinSubmit, logout: clearAuth } = useManagementAuth()
 
-  const [uid, setUid] = useState('')
-  const [amountShekels, setAmountShekels] = useState('')
-  const [chipInfo, setChipInfo] = useState<ChipInfo | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -41,66 +22,9 @@ export function useManagementPage() {
 
   const logout = useCallback(() => {
     clearAuth()
-    setChipInfo(null)
     setActionError(null)
     setActionSuccess(null)
   }, [clearAuth])
-
-  const lookupChip = useCallback(async () => {
-    if (!uid.trim()) {
-      setActionError("הזן מזהה צ'יפ.")
-      return
-    }
-    setLoading(true)
-    setActionError(null)
-    setActionSuccess(null)
-    try {
-      const res = await managementApi.get<ChipInfo>(`/access/management/chip/${encodeURIComponent(uid.trim())}`)
-      setChipInfo(res.data)
-    } catch {
-      setChipInfo(null)
-      setActionError("צ'יפ לא נמצא. ניתן להטעין צ'יפ חדש — הוא יירשם אוטומטית.")
-    } finally {
-      setLoading(false)
-    }
-  }, [uid])
-
-  const topupChip = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault()
-      const amountCents = parseShekelsToCents(amountShekels)
-      if (!uid.trim()) {
-        setActionError("הזן מזהה צ'יפ.")
-        return
-      }
-      if (amountCents == null) {
-        setActionError('הזן סכום תקין להטענה (למשל 10 או 5.50).')
-        return
-      }
-      setLoading(true)
-      setActionError(null)
-      setActionSuccess(null)
-      try {
-        const res = await managementApi.post<TopupResult>('/access/management/chip/topup', {
-          uid: uid.trim(),
-          amount_cents: amountCents,
-        })
-        setChipInfo({
-          uid: res.data.uid,
-          chip_id: res.data.chip_id,
-          balance_cents: res.data.balance_cents,
-          is_enabled: true,
-        })
-        setActionSuccess(`הצ'יפ הוטען ב-${formatMoney(res.data.added_cents)}. יתרה נוכחית: ${formatMoney(res.data.balance_cents)}`)
-        setAmountShekels('')
-      } catch {
-        setActionError("הטענת הצ'יפ נכשלה.")
-      } finally {
-        setLoading(false)
-      }
-    },
-    [uid, amountShekels],
-  )
 
   const openDoor = useCallback(async () => {
     setLoading(true)
@@ -123,20 +47,12 @@ export function useManagementPage() {
     setPin,
     pinError,
     pinLoading,
-    uid,
-    setUid,
-    amountShekels,
-    setAmountShekels,
-    chipInfo,
     actionError,
     actionSuccess,
     loading,
     gateStatus,
-    formatMoney,
     onPinSubmit,
     logout,
-    lookupChip,
-    topupChip,
     openDoor,
   }
 }

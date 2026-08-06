@@ -13,7 +13,7 @@ Design documentation for a robust access transaction flow that guarantees users 
 | Methods | Chip + fingerprint + cash |
 | Cash refund | Issue a staff-redeemable cash receipt; optional best-effort restore into the in-memory cash session |
 | Identity | No `UserId` table — use `subject_type` + `subject_ref` (maps to audit “UserId”) |
-| Deployables | Prefer existing services (`access-control-service`, `chip-service`, `hardware-service`); orchestrator owns the saga |
+| Deployables | Prefer existing services (`access-control-service`, `fingerprints-service`, `hardware-service`); orchestrator owns the saga |
 
 ## Documents
 
@@ -32,7 +32,7 @@ Design documentation for a robust access transaction flow that guarantees users 
 
 - Charge-then-open: `app/access_logic.py`
 - Fire-and-forget door: `hardware-service` `POST /door/open` (204 before relay completes)
-- Chip idempotency: `chip-service` `chip_activity.idempotency_key`
+- Chip idempotency: `fingerprints-service` `chip_activity.idempotency_key`
 - Problem backlog: [../ACCESS_LOGIC_REVIEW.md](../ACCESS_LOGIC_REVIEW.md)
 
 ## Current gap

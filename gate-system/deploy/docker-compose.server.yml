@@ -22,7 +22,7 @@ services:
       - -c
       - envsubst '$$EDGE_HARDWARE_HOST' < /etc/nginx/nginx.template.conf > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
     depends_on:
-      - chip-service
+      - fingerprints-service
       - payment-service
       - access-control-service
       - dashboard
@@ -59,12 +59,12 @@ services:
       retries: 30
     restart: unless-stopped
 
-  chip-service:
+  fingerprints-service:
     build:
       context: .
-      dockerfile: ./services/chip-service/Dockerfile
+      dockerfile: ./services/fingerprints-service/Dockerfile
     env_file:
-      - ./services/chip-service/.env
+      - ./services/fingerprints-service/.env
     depends_on:
       postgres:
         condition: service_healthy

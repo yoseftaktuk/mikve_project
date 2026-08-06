@@ -22,7 +22,7 @@ class CommonSettings(BaseSettings):
     redis_url: str
 
     # Internal service URLs (for service-to-service calls)
-    chip_service_url: str = "http://chip-service:8000"
+    fingerprints_service_url: str = "http://fingerprints-service:8000"
     hardware_service_url: str = "http://hardware-service:8000"
     access_service_url: str = "http://access-control-service:8000"
 

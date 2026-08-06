@@ -36,9 +36,9 @@ This roadmap is for a later implementation effort.
 
 ## Phase 3 — Chip / fingerprint ledger
 
-1. Wire `ILedgerPort` to chip-service with `access-charge:` / `access-refund:` keys.
-2. Ensure ACS client passes `idempotency_key` (extend current `ChipClient.adjust_balance` if needed).
-3. Replace `process_chip_access` charge-then-open with orchestrator.
+1. Wire `ILedgerPort` to fingerprints-service with `access-charge:` / `access-refund:` keys.
+2. Ensure ACS client passes `idempotency_key` (extend current `FingerprintsClient.adjust_balance` if needed).
+3. Replace balance charge-then-open paths with orchestrator (fingerprint/cash).
 4. Fingerprint approve starts saga after approval only.
 5. Tests: double charge same attempt, refund after door fail.
 

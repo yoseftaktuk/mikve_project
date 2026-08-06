@@ -12,6 +12,7 @@ type CardTopupDialogProps = {
 export function CardTopupDialog({ chipUid, formatMoney, onClose, onPaid }: CardTopupDialogProps) {
   const {
     phase,
+    paymentMode,
     amountsCents,
     created,
     status,
@@ -21,12 +22,14 @@ export function CardTopupDialog({ chipUid, formatMoney, onClose, onPaid }: CardT
     iframeRef,
     heightPx,
     requestHeight,
+    onIframeError,
     validateError,
     pay,
     close,
   } = useCardTopupDialog({ chipUid, onClose, onPaid })
 
   const busy = phase === 'creating' || phase === 'submitting' || phase === 'waiting_server'
+  const isMock = paymentMode === 'mock'
 
   return (
     <div className={styles.overlay}>
@@ -59,19 +62,29 @@ export function CardTopupDialog({ chipUid, formatMoney, onClose, onPaid }: CardT
 
         {(phase === 'ready' || phase === 'submitting' || phase === 'waiting_server') && created ? (
           <>
-            <h3 className={styles.title}>תשלום בכרטיס אשראי</h3>
+            <h3 className={styles.title}>
+              תשלום בכרטיס אשראי
+              {isMock ? <span className={styles.mockBadge}> (dev mock)</span> : null}
+            </h3>
             <p className={styles.subtitle}>סכום לטעינה: {formatMoney(created.amount_cents)}</p>
-            <div className={styles.frameWrap}>
-              <iframe
-                ref={iframeRef}
-                title="Nedarim Plus"
-                className={styles.frame}
-                style={{ height: heightPx > 0 ? heightPx : 280 }}
-                src={created.iframe_url}
-                scrolling="no"
-                onLoad={() => requestHeight()}
-              />
-            </div>
+            {isMock ? (
+              <p className={styles.mockHint}>
+                מצב פיתוח — אין חיוב אמיתי. לחץ למטה לסימולציית תשלום וטעינת יתרה.
+              </p>
+            ) : (
+              <div className={styles.frameWrap}>
+                <iframe
+                  ref={iframeRef}
+                  title="Nedarim Plus"
+                  className={styles.frame}
+                  style={{ height: heightPx > 0 ? heightPx : 280 }}
+                  src={created.iframe_url}
+                  scrolling="no"
+                  onLoad={() => requestHeight()}
+                  onError={onIframeError}
+                />
+              </div>
+            )}
             {clientMessage && <p className={styles.status}>{clientMessage}</p>}
             {(validateError || error) && <p className={styles.error}>{validateError || error}</p>}
             <div className={styles.actions}>
@@ -79,13 +92,15 @@ export function CardTopupDialog({ chipUid, formatMoney, onClose, onPaid }: CardT
                 type="button"
                 className={styles.payButton}
                 disabled={busy}
-                onClick={() => pay()}
+                onClick={() => void pay()}
               >
                 {phase === 'submitting'
                   ? 'מעבד תשלום…'
                   : phase === 'waiting_server'
                     ? 'מאשר מול השרת…'
-                    : 'שלם וטען יתרה'}
+                    : isMock
+                      ? 'סימולציית תשלום'
+                      : 'שלם וטען יתרה'}
               </button>
               <button type="button" className={styles.cancelButton} disabled={phase === 'submitting'} onClick={() => void close()}>
                 ביטול

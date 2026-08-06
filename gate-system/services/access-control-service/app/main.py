@@ -12,13 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gate_shared.errors import AppError, ErrorResponse
 from gate_shared.logging import configure_logging
 
-from .access_logic import CashSession, process_cash_inserted, process_chip_access
-from .clients import ChipClient, HardwareClient
+from .access_logic import CashSession, process_cash_inserted
+from .clients import FingerprintsClient, HardwareClient
 from .db import engine, get_db
-from .dev_helpers import DEMO_CHIP_UID, ensure_demo_chip
 from .fingerprint_logic import (
     PendingApprovalStore,
     PendingEnrollmentStore,
+    TopupIdentifyStore,
     approve_pending,
 )
 from .hardware_consumer import HardwareEventConsumer
@@ -27,7 +27,6 @@ from .realtime import PubSubFanout
 from .saga import AccessAttemptReconciler, AccessOrchestrator
 from .saga import models as saga_models  # noqa: F401 — register saga tables on Base.metadata
 from .schemas import (
-    AccessAttemptRequest,
     AccessDecisionResponse,
     AccessLogResponse,
     FingerprintApprovalRequest,
@@ -43,11 +42,16 @@ from .management import (
     ChipTopupResponse,
     ManagementAuthResponse,
     ManagementPinRequest,
+    ManagementUserResponse,
+    ManagementUserUpdateRequest,
     authenticate_pin,
+    delete_user as management_delete_user,
     get_chip_info,
+    list_users as management_list_users,
     open_door as management_open_door,
     require_management_token,
     topup_chip,
+    update_user as management_update_user,
 )
 from .settings import settings
 
@@ -61,11 +65,12 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-chip_client = ChipClient()
+chip_client = FingerprintsClient()
 hardware_client = HardwareClient()
 cash_session = CashSession(timeout_seconds=settings.cash_session_timeout_seconds)
 approvals = PendingApprovalStore(timeout_seconds=settings.fingerprint_approval_timeout_seconds)
 enrollments = PendingEnrollmentStore()
+identify_sessions = TopupIdentifyStore()
 fanout = PubSubFanout(settings.redis_url)
 hardware_consumer: HardwareEventConsumer | None = None
 redis_client: redis.Redis | None = None
@@ -98,6 +103,7 @@ async def startup() -> None:
         publish=_publish,
         approvals=approvals,
         enrollments=enrollments,
+        identify=identify_sessions,
     )
     await hardware_consumer.start()
     if settings.access_saga_enabled:
@@ -122,6 +128,7 @@ async def shutdown() -> None:
     await cash_session.shutdown()
     await approvals.shutdown()
     enrollments.clear()
+    identify_sessions.clear()
     if hardware_consumer is not None:
         await hardware_consumer.stop()
         hardware_consumer = None
@@ -160,18 +167,6 @@ async def _publish(event: dict) -> None:
     await fanout.publish_local(event)
 
 
-@app.post("/access/attempt", response_model=AccessDecisionResponse)
-async def access_attempt(req: AccessAttemptRequest, db: AsyncSession = Depends(get_db)):
-    """Attempt entrance authorization for a scanned chip UID."""
-    return await process_chip_access(
-        req.uid,
-        db,
-        chip_client=chip_client,
-        hardware_client=hardware_client,
-        publish=_publish,
-    )
-
-
 @app.get("/access/logs", response_model=list[AccessLogResponse])
 async def access_logs(db: AsyncSession = Depends(get_db), limit: int = 50):
     """Return recent access grant/deny log entries."""
@@ -206,21 +201,6 @@ async def fingerprint_cancel(req: FingerprintApprovalRequest):
     """Dismiss a pending fingerprint approval without charging."""
     await approvals.clear(req.approval_id, reason="cancelled")
     return None
-
-
-@app.post("/dev/simulate/chip", response_model=AccessDecisionResponse, include_in_schema=False)
-async def dev_simulate_chip(db: AsyncSession = Depends(get_db)):
-    """Simulate a demo chip scan in development mode."""
-    if settings.environment != "dev":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
-    await ensure_demo_chip(chip_client)
-    return await process_chip_access(
-        DEMO_CHIP_UID,
-        db,
-        chip_client=chip_client,
-        hardware_client=hardware_client,
-        publish=_publish,
-    )
 
 
 @app.post("/dev/simulate/cash", response_model=SimulateCashResponse, include_in_schema=False)
@@ -269,6 +249,40 @@ async def management_chip_info(uid: str):
 async def management_chip_topup(req: ChipTopupRequest):
     """Top up a chip balance from the management panel."""
     return await topup_chip(req, chip_client)
+
+
+@app.get(
+    "/management/users",
+    response_model=list[ManagementUserResponse],
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_users_list():
+    """List registered fingerprint ledger users."""
+    return await management_list_users(chip_client)
+
+
+@app.patch(
+    "/management/users/{chip_id}",
+    response_model=ManagementUserResponse,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_users_update(chip_id: str, req: ManagementUserUpdateRequest):
+    """Edit a registered user's name and/or enabled flag."""
+    return await management_update_user(chip_id, req, chip_client)
+
+
+@app.delete(
+    "/management/users/{chip_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_users_delete(chip_id: str):
+    """Delete a registered user and clear their fingerprint template when present."""
+    await management_delete_user(chip_id, chip_client, hardware_client)
+    return None
 
 
 @app.post(
@@ -363,6 +377,30 @@ async def management_fingerprint_enroll_cancel(req: FingerprintEnrollCancelReque
     """Abort a running enrollment and forget its pending details."""
     enrollments.discard(req.session_id)
     await hardware_client.cancel_enroll()
+    return None
+
+
+@app.post(
+    "/management/fingerprint/identify/start",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_fingerprint_identify_start():
+    """Listen for fingerprint scans without creating door approvals."""
+    await identify_sessions.start()
+    return None
+
+
+@app.post(
+    "/management/fingerprint/identify/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_fingerprint_identify_cancel():
+    """Stop desk identify mode and restore entrance scan behavior."""
+    await identify_sessions.cancel()
     return None
 
 

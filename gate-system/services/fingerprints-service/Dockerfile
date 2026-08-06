@@ -12,14 +12,14 @@ RUN pip install --no-cache-dir -U pip
 COPY shared/py /app/shared/py
 COPY deploy/scripts/build-dns-check.sh /tmp/build-dns-check.sh
 RUN chmod +x /tmp/build-dns-check.sh && /tmp/build-dns-check.sh
-COPY services/chip-service/requirements.txt /app/requirements.txt
+COPY services/fingerprints-service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt || \
     (sleep 5 && pip install --no-cache-dir -r /app/requirements.txt) || \
     (sleep 10 && pip install --no-cache-dir -r /app/requirements.txt)
 RUN pip install --no-cache-dir -e /app/shared/py || \
     (sleep 5 && pip install --no-cache-dir -e /app/shared/py)
 
-COPY services/chip-service /app
+COPY services/fingerprints-service /app
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

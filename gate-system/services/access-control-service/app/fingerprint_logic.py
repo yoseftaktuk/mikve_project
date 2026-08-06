@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .clients import ChipClient, HardwareClient
+from .clients import FingerprintsClient, HardwareClient
 from .access_logic import CashSession
 from .models import AccessLog
 from .schemas import AccessDecisionResponse
@@ -218,6 +218,39 @@ class PendingEnrollmentStore:
             del self._sessions[session_id]
 
 
+class TopupIdentifyStore:
+    """Marks the desk money-topup page as listening for fingerprint identity only."""
+
+    def __init__(self, ttl_seconds: int = ENROLLMENT_TTL_SECONDS) -> None:
+        self._ttl_seconds = max(1, ttl_seconds)
+        self._active_until: float | None = None
+        self._lock = asyncio.Lock()
+
+    def is_active(self) -> bool:
+        """True while a desk identify session has not expired."""
+        if self._active_until is None:
+            return False
+        if time.monotonic() >= self._active_until:
+            self._active_until = None
+            return False
+        return True
+
+    async def start(self) -> None:
+        """Activate (or refresh) identify mode for the TTL window."""
+        async with self._lock:
+            self._active_until = time.monotonic() + self._ttl_seconds
+
+    async def cancel(self) -> None:
+        """Deactivate identify mode immediately."""
+        async with self._lock:
+            self._active_until = None
+
+    def clear(self) -> None:
+        """Drop the session without locking (shutdown path)."""
+        self._active_until = None
+
+
+
 async def _deny(
     db: AsyncSession,
     *,
@@ -257,27 +290,51 @@ async def _deny(
     )
 
 
+async def _publish_identify_failed(publish: PublishFn, *, reason: str, slot: int | None = None) -> None:
+    """Announce a desk-identify failure without creating an entrance denial."""
+    await publish(
+        {
+            "type": "fingerprint.identify_failed",
+            "reason": reason,
+            "slot": slot,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+
 async def process_fingerprint_scan(
     slot: int,
     db: AsyncSession,
     *,
-    chip_client: ChipClient,
+    chip_client: FingerprintsClient,
     publish: PublishFn,
     approvals: PendingApprovalStore,
     confidence: int | None = None,
+    identify: TopupIdentifyStore | None = None,
 ) -> PendingApproval | None:
-    """Resolve a matched slot into a pending approval; never charges by itself."""
+    """Resolve a matched slot into a pending approval; never charges by itself.
+
+    When a desk identify session is active, publish fingerprint.identified (or
+    fingerprint.identify_failed) instead of creating door approvals / top-up offers.
+    """
     fee = settings.entrance_fee_cents
     uid = slot_to_uid(slot)
+    identify_mode = identify is not None and identify.is_active()
 
     try:
         chip = await chip_client.validate(uid)
     except ValueError:
-        logger.info("fingerprint_unknown slot=%s", slot)
+        logger.info("fingerprint_unknown slot=%s identify_mode=%s", slot, identify_mode)
+        if identify_mode:
+            await _publish_identify_failed(publish, reason="unknown_fingerprint", slot=slot)
+            return None
         await _deny(db, publish=publish, uid=uid, chip_id=None, reason="unknown_fingerprint", fee_cents=fee)
         return None
 
     if not chip.is_enabled:
+        if identify_mode:
+            await _publish_identify_failed(publish, reason="chip_disabled", slot=slot)
+            return None
         await _deny(
             db,
             publish=publish,
@@ -287,6 +344,26 @@ async def process_fingerprint_scan(
             fee_cents=fee,
             holder_name=chip.holder_name,
             balance_cents=chip.balance_cents,
+        )
+        return None
+
+    if identify_mode:
+        logger.info(
+            "fingerprint_identified slot=%s uid=%s balance_cents=%s",
+            slot,
+            chip.uid,
+            chip.balance_cents,
+        )
+        await publish(
+            {
+                "type": "fingerprint.identified",
+                "slot": slot,
+                "uid": chip.uid,
+                "chip_id": chip.chip_id,
+                "holder_name": chip.holder_name,
+                "balance_cents": chip.balance_cents,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
         )
         return None
 
@@ -356,8 +433,16 @@ async def process_fingerprint_scan(
     return approval
 
 
-async def process_fingerprint_unmatched(db: AsyncSession, *, publish: PublishFn) -> None:
+async def process_fingerprint_unmatched(
+    db: AsyncSession,
+    *,
+    publish: PublishFn,
+    identify: TopupIdentifyStore | None = None,
+) -> None:
     """Announce a finger that matches no stored template."""
+    if identify is not None and identify.is_active():
+        await _publish_identify_failed(publish, reason="unmatched")
+        return
     await _deny(
         db,
         publish=publish,
@@ -372,7 +457,7 @@ async def approve_pending(
     approval_id: str,
     db: AsyncSession,
     *,
-    chip_client: ChipClient,
+    chip_client: FingerprintsClient,
     hardware_client: HardwareClient,
     publish: PublishFn,
     approvals: PendingApprovalStore,
@@ -404,7 +489,7 @@ async def complete_enrollment(
     session_id: str,
     slot: int,
     *,
-    chip_client: ChipClient,
+    chip_client: FingerprintsClient,
     publish: PublishFn,
     enrollments: PendingEnrollmentStore,
 ) -> None:

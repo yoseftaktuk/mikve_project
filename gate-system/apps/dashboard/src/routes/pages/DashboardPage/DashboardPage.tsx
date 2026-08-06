@@ -12,7 +12,7 @@ import { useDashboardPage } from './useDashboardPage'
 export function DashboardPage() {
   usePageMeta({
     title: 'שער כניסה',
-    subtitle: 'בחר איך להיכנס — צ\'יפ או מזומן',
+    subtitle: 'בחר איך להיכנס — טביעת אצבע או מזומן',
     titleInContent: true,
     showLiveStatus: true,
   })
@@ -23,6 +23,8 @@ export function DashboardPage() {
     lastActivity,
     simError,
     simLoading,
+    simSlot,
+    setSimSlot,
     cashProgress,
     pendingApproval,
     approvalSubmitting,
@@ -30,7 +32,8 @@ export function DashboardPage() {
     topupOffer,
     cardTopupOpen,
     dismissChipToast,
-    simulateChip,
+    simulateSlotFromInput,
+    simulateUnmatched,
     simulateCash,
     approvePending,
     cancelPending,
@@ -91,9 +94,25 @@ export function DashboardPage() {
           <details className={styles.devCard}>
             <summary>כלי פיתוח (סימולציה)</summary>
             <div className={styles.devBody}>
+              <label className={styles.simSlotField}>
+                מזהה טביעה (slot)
+                <input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  inputMode="numeric"
+                  value={simSlot}
+                  onChange={(e) => setSimSlot(e.target.value)}
+                  className={styles.simSlotInput}
+                  disabled={simLoading}
+                />
+              </label>
               <div className={styles.devButtons}>
-                <button type="button" disabled={simLoading} onClick={() => void simulateChip()}>
-                  {simLoading ? 'מריץ…' : "סימולציית צ'יפ"}
+                <button type="button" disabled={simLoading} onClick={() => void simulateSlotFromInput()}>
+                  {simLoading ? 'מריץ…' : 'סימולציית אצבע'}
+                </button>
+                <button type="button" disabled={simLoading} onClick={simulateUnmatched}>
+                  אצבע לא מזוהה
                 </button>
                 <button type="button" disabled={simLoading} onClick={() => void simulateCash(100)}>
                   הוסף ₪1
@@ -106,6 +125,7 @@ export function DashboardPage() {
                   {gateStatus ? `שלם ${formatMoney(gateStatus.entrance_fee_cents)}` : 'שלם עלות מלאה'}
                 </button>
               </div>
+              <p className={styles.simHint}>slot 1 = FP-001 (אחרי רישום אצבע)</p>
               {simError && <p className={styles.devError}>{simError}</p>}
             </div>
           </details>

@@ -10,9 +10,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .clients import ChipClient, HardwareClient
+from .clients import FingerprintsClient, HardwareClient
 from .models import AccessLog
-from .schemas import AccessDecisionResponse
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -206,192 +205,6 @@ class CashSession:
             return True
 
 
-async def process_chip_access(
-    uid: str,
-    db: AsyncSession,
-    *,
-    chip_client: ChipClient,
-    hardware_client: HardwareClient,
-    publish,
-    cash_session: CashSession | None = None,
-    hardware_event_id: str | None = None,
-) -> AccessDecisionResponse:
-    """Validate a chip, charge the entrance fee, and open the door if allowed."""
-    if settings.access_saga_enabled:
-        from .saga import AccessOrchestrator
-
-        session = cash_session or CashSession(timeout_seconds=settings.cash_session_timeout_seconds)
-        orch = AccessOrchestrator(
-            chip_client=chip_client,
-            hardware_client=hardware_client,
-            cash_session=session,
-            publish=publish,
-        )
-        return await orch.run_chip_access(uid, db, hardware_event_id=hardware_event_id)
-
-    return await _legacy_process_chip_access(
-        uid, db, chip_client=chip_client, hardware_client=hardware_client, publish=publish
-    )
-
-
-async def _legacy_process_chip_access(
-    uid: str,
-    db: AsyncSession,
-    *,
-    chip_client: ChipClient,
-    hardware_client: HardwareClient,
-    publish,
-) -> AccessDecisionResponse:
-    """Pre-saga chip access path (kept behind ACCESS_SAGA_ENABLED=false)."""
-    fee = settings.entrance_fee_cents
-    door_seconds = settings.door_unlock_seconds
-    ts = datetime.now(timezone.utc).isoformat()
-
-    try:
-        chip = await chip_client.validate(uid)
-    except ValueError:
-        log = AccessLog(chip_id=None, uid=uid, decision="denied", reason="unknown_chip", fee_cents=fee)
-        db.add(log)
-        await db.commit()
-        await publish({"type": "access.denied", "uid": uid, "reason": "unknown_chip", "ts": ts})
-        return AccessDecisionResponse(granted=False, reason="unknown_chip", chip_id=None, fee_cents=fee)
-
-    if not chip.is_enabled:
-        log = AccessLog(
-            chip_id=chip.chip_id,
-            uid=chip.uid,
-            decision="denied",
-            reason="chip_disabled",
-            fee_cents=fee,
-            balance_before_cents=chip.balance_cents,
-            balance_after_cents=chip.balance_cents,
-        )
-        db.add(log)
-        await db.commit()
-        await publish(
-            {
-                "type": "access.denied",
-                "uid": chip.uid,
-                "chip_id": chip.chip_id,
-                "reason": "chip_disabled",
-                "balance_cents": chip.balance_cents,
-                "ts": ts,
-            }
-        )
-        return AccessDecisionResponse(
-            granted=False,
-            reason="chip_disabled",
-            chip_id=chip.chip_id,
-            fee_cents=fee,
-            balance_before_cents=chip.balance_cents,
-            balance_after_cents=chip.balance_cents,
-        )
-
-    if chip.balance_cents < fee:
-        log = AccessLog(
-            chip_id=chip.chip_id,
-            uid=chip.uid,
-            decision="denied",
-            reason="insufficient_balance",
-            fee_cents=fee,
-            balance_before_cents=chip.balance_cents,
-            balance_after_cents=chip.balance_cents,
-        )
-        db.add(log)
-        await db.commit()
-        await publish(
-            {
-                "type": "access.denied",
-                "uid": chip.uid,
-                "chip_id": chip.chip_id,
-                "reason": "insufficient_balance",
-                "balance_cents": chip.balance_cents,
-                "fee_cents": fee,
-                "ts": ts,
-            }
-        )
-        return AccessDecisionResponse(
-            granted=False,
-            reason="insufficient_balance",
-            chip_id=chip.chip_id,
-            fee_cents=fee,
-            balance_before_cents=chip.balance_cents,
-            balance_after_cents=chip.balance_cents,
-        )
-
-    before = chip.balance_cents
-    try:
-        after = await chip_client.adjust_balance(
-            chip_id=chip.chip_id,
-            delta_cents=-fee,
-            reason="entry_fee",
-            description="entrance fee charged",
-        )
-    except ValueError:
-        log = AccessLog(
-            chip_id=chip.chip_id,
-            uid=chip.uid,
-            decision="denied",
-            reason="insufficient_balance",
-            fee_cents=fee,
-            balance_before_cents=before,
-            balance_after_cents=before,
-        )
-        db.add(log)
-        await db.commit()
-        await publish(
-            {
-                "type": "access.denied",
-                "uid": chip.uid,
-                "chip_id": chip.chip_id,
-                "reason": "insufficient_balance",
-                "balance_cents": before,
-                "fee_cents": fee,
-                "ts": ts,
-            }
-        )
-        return AccessDecisionResponse(
-            granted=False,
-            reason="insufficient_balance",
-            chip_id=chip.chip_id,
-            fee_cents=fee,
-            balance_before_cents=before,
-            balance_after_cents=before,
-        )
-
-    await hardware_client.open_door(seconds=door_seconds)
-    log = AccessLog(
-        chip_id=chip.chip_id,
-        uid=chip.uid,
-        decision="granted",
-        reason="ok",
-        fee_cents=fee,
-        balance_before_cents=before,
-        balance_after_cents=after,
-    )
-    db.add(log)
-    await db.commit()
-    await publish(
-        {
-            "type": "access.granted",
-            "uid": chip.uid,
-            "chip_id": chip.chip_id,
-            "method": "chip",
-            "fee_cents": fee,
-            "balance_after_cents": after,
-            "ts": ts,
-        }
-    )
-    return AccessDecisionResponse(
-        granted=True,
-        reason="ok",
-        chip_id=chip.chip_id,
-        fee_cents=fee,
-        balance_before_cents=before,
-        balance_after_cents=after,
-    )
-
-
 async def process_cash_inserted(
     amount_cents: int,
     db: AsyncSession,
@@ -399,7 +212,7 @@ async def process_cash_inserted(
     cash_session: CashSession,
     hardware_client: HardwareClient,
     publish,
-    chip_client: ChipClient | None = None,
+    chip_client: FingerprintsClient | None = None,
     hardware_event_id: str | None = None,
 ) -> tuple[bool, int]:
     """Accumulate cash and open the door once the entrance fee is reached."""
@@ -407,7 +220,7 @@ async def process_cash_inserted(
         from .saga import AccessOrchestrator
 
         orch = AccessOrchestrator(
-            chip_client=chip_client or ChipClient(),
+            chip_client=chip_client or FingerprintsClient(),
             hardware_client=hardware_client,
             cash_session=cash_session,
             publish=publish,

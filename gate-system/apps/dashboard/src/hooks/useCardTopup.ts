@@ -5,6 +5,7 @@ import {
   extractApiErrorMessage,
   getCardTopupStatus,
   getPaymentHealth,
+  simulateCardTopupPay,
 } from '../app/paymentsApi'
 import type { CardTopupCreateResponse, CardTopupStatusResponse } from '../types/topup'
 
@@ -25,6 +26,7 @@ export type CardTopupPhase =
 export function useCardTopup(chipUid: string | null) {
   const [phase, setPhase] = useState<CardTopupPhase>('choose_amount')
   const [amountsCents, setAmountsCents] = useState<number[]>(DEFAULT_AMOUNTS)
+  const [paymentMode, setPaymentMode] = useState<'mock' | 'nedarim'>('nedarim')
   const [created, setCreated] = useState<CardTopupCreateResponse | null>(null)
   const [status, setStatus] = useState<CardTopupStatusResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -38,6 +40,9 @@ export function useCardTopup(chipUid: string | null) {
         if (cancelled) return
         if (health.topup_amounts_cents?.length) {
           setAmountsCents(health.topup_amounts_cents)
+        }
+        if (health.payment_mode === 'mock' || health.payment_mode === 'nedarim') {
+          setPaymentMode(health.payment_mode)
         }
       })
       .catch(() => {
@@ -149,6 +154,7 @@ export function useCardTopup(chipUid: string | null) {
 
   return {
     phase,
+    paymentMode,
     amountsCents,
     created,
     status,
@@ -160,5 +166,7 @@ export function useCardTopup(chipUid: string | null) {
     markSubmitting,
     reset,
     setPhase,
+    setError,
+    simulateMockPay: simulateCardTopupPay,
   }
 }

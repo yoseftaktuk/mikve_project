@@ -123,6 +123,22 @@
   color: #16a34a;
 }
 
+.mockBadge {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #ca8a04;
+}
+
+.mockHint {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px dashed #ca8a04;
+  background: rgba(202, 138, 4, 0.08);
+  font-size: var(--text-fluid-sm);
+  color: var(--text-h);
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

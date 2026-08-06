@@ -26,14 +26,6 @@ type WsEvent = {
   expires_in_seconds?: number
 }
 
-type AccessDecision = {
-  granted: boolean
-  reason: string
-  fee_cents: number
-  balance_before_cents?: number | null
-  balance_after_cents?: number | null
-}
-
 type SimulateCashResult = {
   granted: boolean
   accumulated_cents: number
@@ -149,33 +141,14 @@ function chipToastFromEvent(event: WsEvent): ChipToastData | null {
   return null
 }
 
-function chipToastFromDecision(decision: AccessDecision): ChipToastData {
-  if (decision.granted) {
-    return grantedToast({ balance_after_cents: decision.balance_after_cents ?? undefined })
-  }
-  if (decision.reason === 'insufficient_balance') {
-    return {
-      kind: 'denied',
-      title: 'אין מספיק יתרה',
-      message: `נדרשים ${formatMoney(decision.fee_cents)} לכניסה.`,
-      balanceCents: decision.balance_before_cents ?? null,
-    }
-  }
-  return {
-    kind: 'denied',
-    title: 'הכניסה נדחתה',
-    message: decision.reason,
-    balanceCents: decision.balance_before_cents ?? null,
-  }
-}
-
-/** Tracks live gate status, WebSocket events, and cash/chip simulation for the entrance screen. */
+/** Tracks live gate status, WebSocket events, and cash/fingerprint simulation for the entrance screen. */
 export function useDashboardPage() {
   const [gateStatus, setGateStatus] = useState<GateStatus | null>(null)
   const [chipToast, setChipToast] = useState<ChipToastData | null>(null)
   const [lastActivity, setLastActivity] = useState<string | null>(null)
   const [simError, setSimError] = useState<string | null>(null)
   const [simLoading, setSimLoading] = useState(false)
+  const [simSlot, setSimSlot] = useState('1')
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null)
   const [approvalSubmitting, setApprovalSubmitting] = useState(false)
   const [approvalError, setApprovalError] = useState<string | null>(null)
@@ -206,20 +179,30 @@ export function useDashboardPage() {
 
   const dismissChipToast = useCallback(() => setChipToast(null), [])
 
-  const simulateChip = useCallback(async () => {
+  const simulateFingerprint = useCallback(async (slot: number | null) => {
     setSimLoading(true)
     setSimError(null)
     try {
-      const res = await api.post<AccessDecision>('/access/dev/simulate/chip')
-      showChipToast(chipToastFromDecision(res.data))
-      refreshStatus()
-      setLastActivity(res.data.granted ? "סימולציית צ'יפ — הדלת נפתחה" : "סימולציית צ'יפ — הכניסה נדחתה")
+      await api.post('/hardware/dev/fingerprint/scan', { slot })
     } catch {
-      setSimError("סימולציית הצ'יפ נכשלה. ודא שהשרתים רצים (docker compose up).")
+      setSimError('סימולציית האצבע נכשלה. ודא ש-HARDWARE_MODE=mock והשרתים רצים.')
     } finally {
       setSimLoading(false)
     }
-  }, [refreshStatus, showChipToast])
+  }, [])
+
+  const simulateSlotFromInput = useCallback(async () => {
+    const parsed = Number.parseInt(simSlot.trim(), 10)
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1000) {
+      setSimError('הזן מספר מזהה טביעה תקין (0–1000).')
+      return
+    }
+    await simulateFingerprint(parsed)
+  }, [simSlot, simulateFingerprint])
+
+  const simulateUnmatched = useCallback(() => {
+    void simulateFingerprint(null)
+  }, [simulateFingerprint])
 
   const simulateCash = useCallback(
     async (amountCents: number) => {
@@ -397,6 +380,8 @@ export function useDashboardPage() {
     lastActivity,
     simError,
     simLoading,
+    simSlot,
+    setSimSlot,
     cashProgress,
     pendingApproval,
     approvalSubmitting,
@@ -404,7 +389,8 @@ export function useDashboardPage() {
     topupOffer,
     cardTopupOpen,
     dismissChipToast,
-    simulateChip,
+    simulateSlotFromInput,
+    simulateUnmatched,
     simulateCash,
     approvePending,
     cancelPending,

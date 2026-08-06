@@ -14,10 +14,6 @@ class DoorOpenResponse(BaseModel):
     unlocked_for_seconds: int
 
 
-class SimulateRfidRequest(BaseModel):
-    uid: str = Field(min_length=4, max_length=64)
-
-
 class SimulateCashRequest(BaseModel):
     amount_cents: int = Field(gt=0, le=1_000_00)
 
@@ -29,4 +25,8 @@ class SimulateFingerprintRequest(BaseModel):
 
 class FingerprintEnrollRequest(BaseModel):
     session_id: str = Field(min_length=4, max_length=64)
+
+
+class FingerprintDeleteRequest(BaseModel):
+    slot: int = Field(ge=0, le=1000)
 

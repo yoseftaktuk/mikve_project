@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..access_logic import CashSession
 from ..clients import (
-    ChipClient,
+    FingerprintsClient,
     DoorRejectedError,
     HardwareClient,
     HardwareUnavailableError,
@@ -25,7 +25,6 @@ from .models import AccessAttempt, CashReceipt, DoorOperation, PaymentTransactio
 from .repository import AccessAttemptRepository, TransitionConflictError
 from .statuses import (
     METHOD_CASH,
-    METHOD_CHIP,
     METHOD_FINGERPRINT,
     STATUS_CHARGED,
     STATUS_COMPLETED,
@@ -56,7 +55,7 @@ class AccessOrchestrator:
     def __init__(
         self,
         *,
-        chip_client: ChipClient,
+        chip_client: FingerprintsClient,
         hardware_client: HardwareClient,
         cash_session: CashSession,
         publish: PublishFn,
@@ -65,116 +64,6 @@ class AccessOrchestrator:
         self._hardware = hardware_client
         self._cash = cash_session
         self._publish = publish
-
-    async def run_chip_access(
-        self,
-        uid: str,
-        db: AsyncSession,
-        *,
-        hardware_event_id: str | None = None,
-    ) -> AccessDecisionResponse:
-        """Validate, charge, open door for an RFID/NFC chip."""
-        repo = AccessAttemptRepository(db)
-        if hardware_event_id:
-            existing = await repo.get_by_hardware_event_id(hardware_event_id)
-            if existing is not None:
-                return self._decision_from_attempt(existing)
-
-        attempt_id = uuid.uuid4()
-        correlation_id = attempt_id
-        fee = settings.entrance_fee_cents
-        attempt = AccessAttempt(
-            id=attempt_id,
-            correlation_id=correlation_id,
-            method=METHOD_CHIP,
-            subject_type="uid",
-            subject_ref=uid,
-            uid=uid,
-            status=STATUS_CREATED,
-            fee_cents=fee,
-            hardware_event_id=hardware_event_id,
-            door_attempt_count=0,
-            charge_taken=False,
-        )
-        await repo.create(attempt)
-        await db.commit()
-
-        try:
-            chip = await self._chip.validate(uid)
-        except ValueError:
-            await self._fail_never_charged(repo, attempt, "unknown_chip")
-            await self._legacy_deny(db, uid=uid, chip_id=None, reason="unknown_chip", fee=fee)
-            await db.commit()
-            await self._publish_denied(uid=uid, chip_id=None, reason="unknown_chip", fee=fee)
-            return AccessDecisionResponse(granted=False, reason="unknown_chip", chip_id=None, fee_cents=fee)
-
-        attempt.chip_id = uuid.UUID(chip.chip_id)
-        attempt.holder_name = chip.holder_name
-        attempt.balance_before_cents = chip.balance_cents
-        await db.commit()
-
-        if not chip.is_enabled:
-            await self._fail_never_charged(repo, attempt, "chip_disabled")
-            await self._legacy_deny(
-                db,
-                uid=chip.uid,
-                chip_id=chip.chip_id,
-                reason="chip_disabled",
-                fee=fee,
-                before=chip.balance_cents,
-            )
-            await db.commit()
-            await self._publish_denied(
-                uid=chip.uid, chip_id=chip.chip_id, reason="chip_disabled", fee=fee, balance=chip.balance_cents
-            )
-            return AccessDecisionResponse(
-                granted=False,
-                reason="chip_disabled",
-                chip_id=chip.chip_id,
-                fee_cents=fee,
-                balance_before_cents=chip.balance_cents,
-                balance_after_cents=chip.balance_cents,
-            )
-
-        if chip.balance_cents < fee:
-            await self._fail_never_charged(repo, attempt, "insufficient_balance")
-            await self._legacy_deny(
-                db,
-                uid=chip.uid,
-                chip_id=chip.chip_id,
-                reason="insufficient_balance",
-                fee=fee,
-                before=chip.balance_cents,
-            )
-            await db.commit()
-            await self._publish_denied(
-                uid=chip.uid,
-                chip_id=chip.chip_id,
-                reason="insufficient_balance",
-                fee=fee,
-                balance=chip.balance_cents,
-            )
-            return AccessDecisionResponse(
-                granted=False,
-                reason="insufficient_balance",
-                chip_id=chip.chip_id,
-                fee_cents=fee,
-                balance_before_cents=chip.balance_cents,
-                balance_after_cents=chip.balance_cents,
-            )
-
-        await repo.transition(attempt.id, STATUS_CREATED, STATUS_VALIDATED, "chip_ok")
-        await db.commit()
-        return await self._charge_and_open_balance(
-            repo,
-            db,
-            attempt,
-            chip_id=chip.chip_id,
-            uid=chip.uid,
-            method=METHOD_CHIP,
-            before=chip.balance_cents,
-            holder_name=chip.holder_name,
-        )
 
     async def run_fingerprint_approve(
         self,

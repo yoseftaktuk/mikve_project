@@ -6,12 +6,13 @@ import logging
 
 import redis.asyncio as redis
 
-from .access_logic import CashSession, process_cash_inserted, process_chip_access
-from .clients import ChipClient, HardwareClient
+from .access_logic import CashSession, process_cash_inserted
+from .clients import FingerprintsClient, HardwareClient
 from .db import SessionLocal
 from .fingerprint_logic import (
     PendingApprovalStore,
     PendingEnrollmentStore,
+    TopupIdentifyStore,
     complete_enrollment,
     process_fingerprint_scan,
     process_fingerprint_unmatched,
@@ -21,18 +22,19 @@ logger = logging.getLogger(__name__)
 
 
 class HardwareEventConsumer:
-    """Subscribes to hardware.events and runs chip/cash/fingerprint access logic."""
+    """Subscribes to hardware.events and runs cash/fingerprint access logic."""
 
     def __init__(
         self,
         redis_url: str,
         *,
-        chip_client: ChipClient,
+        chip_client: FingerprintsClient,
         hardware_client: HardwareClient,
         cash_session: CashSession,
         publish,
         approvals: PendingApprovalStore,
         enrollments: PendingEnrollmentStore,
+        identify: TopupIdentifyStore,
     ) -> None:
         self._redis_url = redis_url
         self._chip_client = chip_client
@@ -41,6 +43,7 @@ class HardwareEventConsumer:
         self._publish = publish
         self._approvals = approvals
         self._enrollments = enrollments
+        self._identify = identify
         self._redis: redis.Redis | None = None
         self._task: asyncio.Task | None = None
 
@@ -78,7 +81,7 @@ class HardwareEventConsumer:
             await pubsub.aclose()
 
     async def _handle(self, raw: str) -> None:
-        """Dispatch rfid, cash, and fingerprint events to access handlers."""
+        """Dispatch cash and fingerprint events to access handlers."""
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:
@@ -87,20 +90,6 @@ class HardwareEventConsumer:
 
         try:
             event_type = event.get("type")
-            if event_type == "rfid.scan":
-                uid = event.get("uid")
-                if not uid:
-                    return
-                async with SessionLocal() as db:
-                    await process_chip_access(
-                        str(uid),
-                        db,
-                        chip_client=self._chip_client,
-                        hardware_client=self._hardware_client,
-                        publish=self._publish,
-                        cash_session=self._cash_session,
-                    )
-                return
 
             if event_type == "cash.inserted":
                 amount_cents = event.get("amount_cents")
@@ -129,12 +118,15 @@ class HardwareEventConsumer:
                         publish=self._publish,
                         approvals=self._approvals,
                         confidence=event.get("confidence"),
+                        identify=self._identify,
                     )
                 return
 
             if event_type == "fingerprint.unmatched":
                 async with SessionLocal() as db:
-                    await process_fingerprint_unmatched(db, publish=self._publish)
+                    await process_fingerprint_unmatched(
+                        db, publish=self._publish, identify=self._identify
+                    )
                 return
 
             if event_type == "fingerprint.enrolled":

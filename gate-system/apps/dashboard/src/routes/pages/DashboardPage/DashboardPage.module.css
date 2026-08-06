@@ -30,6 +30,27 @@
   margin-top: 0.25rem;
 }
 
+.simSlotField {
+  display: block;
+  text-align: right;
+  margin-bottom: 0.4rem;
+  font-size: clamp(0.7rem, 1.5dvh, 0.85rem);
+  color: var(--text);
+}
+
+.simSlotInput {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.2rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 0.55rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: clamp(0.7rem, 1.5dvh, 0.85rem);
+}
+
 .devButtons {
   display: flex;
   flex-wrap: wrap;
@@ -56,6 +77,13 @@
 .devButtons button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.simHint {
+  margin: 0.35rem 0 0;
+  font-size: clamp(0.65rem, 1.3dvh, 0.8rem);
+  color: var(--text);
+  text-align: center;
 }
 
 .devError {

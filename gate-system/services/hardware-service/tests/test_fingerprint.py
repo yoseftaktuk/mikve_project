@@ -23,6 +23,7 @@ class FakeSensor:
         self._store_slot = store_slot
         self._compare_score = compare_score
         self.converted_buffers: list[int] = []
+        self.deleted_slots: list[int] = []
 
     def verifyPassword(self) -> bool:  # noqa: N802 - pyfingerprint API
         return True
@@ -51,6 +52,9 @@ class FakeSensor:
 
     def storeTemplate(self) -> int:  # noqa: N802 - pyfingerprint API
         return self._store_slot
+
+    def deleteTemplate(self, slot: int) -> None:  # noqa: N802 - pyfingerprint API
+        self.deleted_slots.append(int(slot))
 
 
 def build_controller(sensor: FakeSensor, *, loop: asyncio.AbstractEventLoop, steps: list, matches: list):
@@ -232,3 +236,21 @@ async def test_mock_adapter_status_reports_fingerprint_reader():
     status = await adapter.get_status()
 
     assert status.fingerprint_reader_connected is True
+
+
+async def test_mock_adapter_delete_fingerprint_is_idempotent():
+    adapter = MockHardwareAdapter(on_rfid_scan=None, on_cash_inserted=None)
+    result = await adapter.enroll_fingerprint("sess-del")
+    slot = int(result["slot"])  # type: ignore[arg-type]
+    assert slot in adapter._enrolled_slots
+
+    await adapter.delete_fingerprint(slot)
+    await adapter.delete_fingerprint(slot)
+    assert slot not in adapter._enrolled_slots
+
+
+async def test_controller_delete_template_calls_sensor():
+    sensor = FakeSensor()
+    controller = build_controller(sensor, loop=asyncio.get_running_loop(), steps=[], matches=[])
+    await asyncio.to_thread(controller.delete_template_sync, 9)
+    assert sensor.deleted_slots == [9]

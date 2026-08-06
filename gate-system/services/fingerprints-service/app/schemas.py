@@ -17,12 +17,26 @@ class ChipRenameRequest(BaseModel):
     holder_name: str | None = Field(default=None, max_length=80)
 
 
+class ChipUpdateRequest(BaseModel):
+    holder_name: str | None = Field(default=None, max_length=80)
+    is_enabled: bool | None = None
+
+
 class ChipResponse(BaseModel):
     id: uuid.UUID
     uid: str
     holder_name: str | None
     is_enabled: bool
     assigned_user_id: uuid.UUID | None
+    created_at: datetime
+
+
+class ChipListItemResponse(BaseModel):
+    id: uuid.UUID
+    uid: str
+    holder_name: str | None
+    is_enabled: bool
+    balance_cents: int
     created_at: datetime
 
 

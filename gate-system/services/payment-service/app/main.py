@@ -13,10 +13,10 @@ from gate_shared.errors import AppError, ErrorResponse
 from gate_shared.logging import configure_logging
 
 from .client_ip import resolve_callback_source_ip
-from .clients import ChipClient
+from .clients import FingerprintsClient
 from .db import engine, get_db
 from .models import STATUS_CREDITING, STATUS_PENDING, Base, CardTopup
-from .nedarim_plus import NedarimPlusClient
+from .payment_provider import PaymentProvider, build_payment_provider
 from .provider import charge_credit_card
 from .schemas import (
     CardTopupCreateRequest,
@@ -31,6 +31,7 @@ from .topup_logic import (
     create_card_topup,
     get_card_topup,
     process_nedarim_callback,
+    simulate_mock_card_payment,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,14 +45,14 @@ app = FastAPI(
 )
 
 redis_client: redis.Redis | None = None
-chip_client = ChipClient()
-nedarim_client = NedarimPlusClient()
+chip_client = FingerprintsClient()
+payment_provider: PaymentProvider = build_payment_provider()
 
 
 @app.on_event("startup")
 async def startup() -> None:
     """Create tables and connect to Redis."""
-    global redis_client
+    global redis_client, payment_provider
     configure_logging(settings.service_name, settings.log_level)
     if not settings.postgres_dsn:
         raise RuntimeError("POSTGRES_DSN is required for payment-service")
@@ -59,9 +60,11 @@ async def startup() -> None:
         await conn.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {settings.postgres_schema}")
         await conn.run_sync(Base.metadata.create_all)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+    payment_provider = build_payment_provider()
     logger.info(
-        "startup_complete nedarim_configured=%s public_base_url_set=%s topup_amounts=%s",
-        nedarim_client.is_configured,
+        "startup_complete payment_mode=%s provider_ready=%s public_base_url_set=%s topup_amounts=%s",
+        settings.payment_mode,
+        payment_provider.is_configured,
         bool(settings.public_base_url),
         list(settings.topup_amount_options_cents),
     )
@@ -97,7 +100,8 @@ async def healthz(db: AsyncSession = Depends(get_db)):
     return {
         "status": "ok",
         "service": settings.service_name,
-        "nedarim_configured": nedarim_client.is_configured,
+        "payment_mode": settings.payment_mode,
+        "nedarim_configured": payment_provider.is_configured,
         "public_base_url_set": bool(settings.public_base_url),
         "topup_amounts_cents": list(settings.topup_amount_options_cents),
         "pending_topups": int(pending or 0),
@@ -113,7 +117,7 @@ async def card_topups_create(req: CardTopupCreateRequest, db: AsyncSession = Dep
         amount_cents=req.amount_cents,
         db=db,
         chip_client=chip_client,
-        nedarim_client=nedarim_client,
+        payment_provider=payment_provider,
     )
     return CardTopupCreateResponse(
         topup_id=created.topup_id,
@@ -163,6 +167,28 @@ async def _publish_payment_event(event: dict[str, Any]) -> None:
     if redis_client is None:
         return
     await redis_client.publish("payment.events", json.dumps(event))
+
+
+@app.post("/dev/card-topups/{topup_id}/simulate-pay", include_in_schema=False)
+async def dev_simulate_card_topup_pay(topup_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Mock mode only: deliver a fake Nedarim CallBack and credit the chip."""
+    result = await simulate_mock_card_payment(
+        topup_id=topup_id,
+        db=db,
+        chip_client=chip_client,
+        publish=_publish_payment_event,
+    )
+    topup = await db.get(CardTopup, topup_id)
+    balance_after = topup.balance_after_cents if topup is not None else None
+    return JSONResponse(
+        status_code=result.http_status,
+        content={
+            "status": "ok" if result.accepted else "error",
+            "code": result.code,
+            "message": result.message,
+            "balance_after_cents": balance_after,
+        },
+    )
 
 
 @app.post("/nedarim/callback/{topup_id}")

@@ -9,9 +9,11 @@ from app.clients import ChipValidation
 from app.fingerprint_logic import (
     PendingApprovalStore,
     PendingEnrollmentStore,
+    TopupIdentifyStore,
     approve_pending,
     complete_enrollment,
     process_fingerprint_scan,
+    process_fingerprint_unmatched,
     slot_to_uid,
     uid_to_slot,
 )
@@ -21,7 +23,7 @@ FEE = settings.entrance_fee_cents
 
 
 def chip_id_for(uid: str) -> str:
-    """Chip ids are UUIDs in chip-service, so fakes must look the same."""
+    """Chip ids are UUIDs in fingerprints-service, so fakes must look the same."""
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, uid))
 
 
@@ -53,7 +55,7 @@ class FakeDb:
         return self._by_id.get(key)
 
 
-class FakeChipClient:
+class FakeFingerprintsClient:
     def __init__(self, chips: dict[str, ChipValidation] | None = None) -> None:
         self.chips = chips or {}
         self.balances: dict[str, int] = {c.chip_id: c.balance_cents for c in self.chips.values()}
@@ -159,13 +161,13 @@ def test_slot_uid_roundtrip():
 
 
 def test_uid_to_slot_ignores_other_uids():
-    assert uid_to_slot("DEMO-UID-1234") is None
+    assert uid_to_slot("RFID-UID-1234") is None
     assert uid_to_slot("FP-abc") is None
 
 
 async def test_scan_publishes_pending_without_charging():
     uid = slot_to_uid(3)
-    chip_client = FakeChipClient({uid: chip(uid, balance_cents=FEE * 2)})
+    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
@@ -190,7 +192,7 @@ async def test_scan_publishes_pending_without_charging():
     ],
 )
 async def test_scan_denials(chips: dict, reason: str):
-    chip_client = FakeChipClient(chips)
+    chip_client = FakeFingerprintsClient(chips)
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
@@ -210,7 +212,7 @@ async def test_scan_denials(chips: dict, reason: str):
 
 async def test_scan_insufficient_balance_offers_topup():
     uid = slot_to_uid(5)
-    chip_client = FakeChipClient({uid: chip(uid, balance_cents=FEE - 1)})
+    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE - 1)})
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
@@ -233,7 +235,7 @@ async def test_approve_charges_once_and_opens_door():
     from tests.test_access_saga import _patch_repo
 
     uid = slot_to_uid(9)
-    chip_client = FakeChipClient({uid: chip(uid, balance_cents=FEE * 3)})
+    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 3)})
     hardware_client = FakeHardwareClient()
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
@@ -331,7 +333,7 @@ async def test_cancel_clears_only_matching_approval():
 
 
 async def test_complete_enrollment_creates_named_chip_with_initial_balance():
-    chip_client = FakeChipClient()
+    chip_client = FakeFingerprintsClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(holder_name="דנה כהן", initial_amount_cents=5000)
@@ -349,7 +351,7 @@ async def test_complete_enrollment_creates_named_chip_with_initial_balance():
 
 async def test_complete_enrollment_renames_when_sensor_reuses_slot():
     uid = slot_to_uid(2)
-    chip_client = FakeChipClient({uid: chip(uid, balance_cents=1200, holder_name="שם קודם")})
+    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=1200, holder_name="שם קודם")})
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(holder_name="שם חדש")
@@ -364,7 +366,7 @@ async def test_complete_enrollment_renames_when_sensor_reuses_slot():
 
 
 async def test_complete_enrollment_ignores_unknown_session():
-    chip_client = FakeChipClient()
+    chip_client = FakeFingerprintsClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
 
@@ -382,3 +384,112 @@ def test_enrollment_session_is_consumed_once():
 
     assert enrollments.pop(session.session_id) is not None
     assert enrollments.pop(session.session_id) is None
+
+
+async def test_identify_mode_publishes_identified_without_pending():
+    uid = slot_to_uid(3)
+    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
+    publish = Recorder()
+    approvals = PendingApprovalStore(timeout_seconds=25)
+    approvals.set_publish(publish)
+    identify = TopupIdentifyStore()
+    await identify.start()
+    db = FakeDb()
+
+    approval = await process_fingerprint_scan(
+        3,
+        db,
+        chip_client=chip_client,
+        publish=publish,
+        approvals=approvals,
+        identify=identify,
+    )
+
+    assert approval is None
+    assert approvals.current is None
+    assert publish.types() == ["fingerprint.identified"]
+    assert publish.last()["uid"] == uid
+    assert publish.last()["holder_name"] == "דנה"
+    assert publish.last()["balance_cents"] == FEE * 2
+    assert chip_client.adjustments == []
+
+
+async def test_identify_mode_low_balance_still_identifies():
+    uid = slot_to_uid(5)
+    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE - 1)})
+    publish = Recorder()
+    approvals = PendingApprovalStore(timeout_seconds=25)
+    identify = TopupIdentifyStore()
+    await identify.start()
+    db = FakeDb()
+
+    approval = await process_fingerprint_scan(
+        5,
+        db,
+        chip_client=chip_client,
+        publish=publish,
+        approvals=approvals,
+        identify=identify,
+    )
+
+    assert approval is None
+    assert publish.types() == ["fingerprint.identified"]
+    assert "access.topup_needed" not in publish.types()
+    assert publish.last()["balance_cents"] == FEE - 1
+
+
+async def test_identify_mode_unknown_publishes_identify_failed():
+    publish = Recorder()
+    approvals = PendingApprovalStore(timeout_seconds=25)
+    identify = TopupIdentifyStore()
+    await identify.start()
+    db = FakeDb()
+
+    approval = await process_fingerprint_scan(
+        8,
+        db,
+        chip_client=FakeFingerprintsClient(),
+        publish=publish,
+        approvals=approvals,
+        identify=identify,
+    )
+
+    assert approval is None
+    assert publish.types() == ["fingerprint.identify_failed"]
+    assert publish.last()["reason"] == "unknown_fingerprint"
+    assert db.commits == 0
+
+
+async def test_identify_mode_unmatched_publishes_identify_failed():
+    publish = Recorder()
+    identify = TopupIdentifyStore()
+    await identify.start()
+    db = FakeDb()
+
+    await process_fingerprint_unmatched(db, publish=publish, identify=identify)
+
+    assert publish.types() == ["fingerprint.identify_failed"]
+    assert publish.last()["reason"] == "unmatched"
+    assert db.commits == 0
+
+
+async def test_identify_inactive_restores_entrance_pending():
+    uid = slot_to_uid(3)
+    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
+    publish = Recorder()
+    approvals = PendingApprovalStore(timeout_seconds=25)
+    approvals.set_publish(publish)
+    identify = TopupIdentifyStore()
+    db = FakeDb()
+
+    approval = await process_fingerprint_scan(
+        3,
+        db,
+        chip_client=chip_client,
+        publish=publish,
+        approvals=approvals,
+        identify=identify,
+    )
+
+    assert approval is not None
+    assert publish.types() == ["access.pending"]

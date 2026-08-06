@@ -58,6 +58,10 @@ class HardwareAdapter:
         """Abort a running fingerprint enrollment."""
         raise NotImplementedError
 
+    async def delete_fingerprint(self, slot: int) -> None:
+        """Remove a stored fingerprint template from the sensor."""
+        raise NotImplementedError
+
     async def start(self) -> None:
         """Initialize hardware listeners."""
         return None
@@ -85,6 +89,7 @@ class MockHardwareAdapter(HardwareAdapter):
         self._on_fingerprint_progress = on_fingerprint_progress
         self._next_slot = itertools.count(1)
         self._enroll_cancelled = False
+        self._enrolled_slots: set[int] = set()
 
     async def get_status(self) -> HardwareStatus:
         """Return a connected status for all mock devices."""
@@ -132,12 +137,18 @@ class MockHardwareAdapter(HardwareAdapter):
             return {"step": "cancelled", "slot": None}
 
         slot = next(self._next_slot)
+        self._enrolled_slots.add(slot)
         await self._emit_progress(session_id, STEP_STORED, slot)
         return {"step": STEP_STORED, "slot": slot}
 
     async def cancel_enroll(self) -> None:
         """Mark the simulated enrollment as cancelled."""
         self._enroll_cancelled = True
+
+    async def delete_fingerprint(self, slot: int) -> None:
+        """Remove a simulated enrolled slot (idempotent)."""
+        self._enrolled_slots.discard(int(slot))
+        logger.info("fingerprint_template_deleted slot=%s", slot)
 
     async def _emit_progress(self, session_id: str, step: str, slot: int | None) -> None:
         if self._on_fingerprint_progress is not None:
@@ -271,3 +282,9 @@ class RpiHardwareAdapter(HardwareAdapter):
         if self._fingerprint is None:
             return
         self._fingerprint.cancel_enroll()
+
+    async def delete_fingerprint(self, slot: int) -> None:
+        """Delete a template from the physical fingerprint sensor."""
+        if self._fingerprint is None:
+            raise RuntimeError("fingerprint reader is not configured")
+        await asyncio.to_thread(self._fingerprint.delete_template_sync, int(slot))

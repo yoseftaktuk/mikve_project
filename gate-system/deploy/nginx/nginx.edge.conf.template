@@ -40,7 +40,7 @@ http {
     }
 
     # Business APIs live on the LAN server Nginx.
-    location /api/chips/ {
+    location /api/fingerprints/ {
       set $server_api "http://${SERVER_LAN_IP}";
       proxy_pass $server_api$request_uri;
       proxy_set_header Host $host;

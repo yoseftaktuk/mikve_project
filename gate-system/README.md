@@ -15,7 +15,7 @@ Production-ready starter for a physical entrance gate with RFID/NFC access, bala
 
 Services:
 
-- `chip-service`: chip registry, balances, chip history (fingerprints are virtual chips `FP-<slot>`)
+- `fingerprints-service`: chip registry, balances, chip history (fingerprints are virtual chips `FP-<slot>`)
 - `hardware-service`: RFID reader + coin acceptor + relay lock + fingerprint sensor + health monitoring
 - `access-control-service`: orchestrates entrance authorization, logs access, real-time events
 - `payment-service`: cash stub + **Nedarim Plus** credit-card balance top-up (callback is the only credit path)
@@ -28,7 +28,7 @@ Services:
 ```bash
 cd gate-system
 cp .env.example .env
-cp services/chip-service/.env.example services/chip-service/.env
+cp services/fingerprints-service/.env.example services/fingerprints-service/.env
 cp services/hardware-service/.env.example services/hardware-service/.env
 cp services/access-control-service/.env.example services/access-control-service/.env
 cp services/payment-service/.env.example services/payment-service/.env
@@ -56,7 +56,7 @@ docker compose -f docker-compose.yml up --build
 
 - **Dashboard**: `http://localhost/`
 - **OpenAPI**:
-  - `http://localhost/api/chips/docs`
+  - `http://localhost/api/fingerprints/docs`
   - `http://localhost/api/hardware/docs`
   - `http://localhost/api/access/docs`
 
@@ -177,7 +177,7 @@ cd gate-system
 
 ```bash
 cp .env.example .env
-cp services/chip-service/.env.example services/chip-service/.env
+cp services/fingerprints-service/.env.example services/fingerprints-service/.env
 cp services/hardware-service/.env.example services/hardware-service/.env
 cp services/access-control-service/.env.example services/access-control-service/.env
 cp services/payment-service/.env.example services/payment-service/.env
@@ -258,12 +258,12 @@ http://<PI-IP>/
 
 ```bash
 # החלף <PI-IP> ו-<UID> בערכים שלך
-curl -X POST http://<PI-IP>/api/chips/chips \
+curl -X POST http://<PI-IP>/api/fingerprints/fingerprints \
   -H "Content-Type: application/json" \
   -d '{"uid": "YOUR-CHIP-UID"}'
 
 # טעינת יתרה (1000 אגורות = ₪10)
-curl -X POST http://<PI-IP>/api/chips/chips/<CHIP_ID>/balance/adjust \
+curl -X POST http://<PI-IP>/api/fingerprints/fingerprints/<CHIP_ID>/balance/adjust \
   -H "Content-Type: application/json" \
   -d '{"delta_cents": 1000, "reason": "topup", "description": "initial balance"}'
 ```
@@ -367,7 +367,7 @@ HARDWARE_MODE=mock
 docker compose up --build
 ```
 
-בדשבורד: **כלי פיתוח (סימולציה)** — סימולציית צ'יפ / מזומן.
+בדשבורד: **כלי פיתוח (סימולציה)** — סימולציית אצבע / מזומן.
 
 סימולציית טביעת אצבע (mock בלבד) — החריץ שהוחזר בעת הרישום, למשל 1:
 
@@ -400,7 +400,7 @@ dashboard + thin Nginx           postgres, redis, chip, access,
 cd gate-system
 cp .env.example .env
 # Set EDGE_HARDWARE_HOST=<PI_LAN_IP>  (e.g. 192.168.1.50)
-cp services/chip-service/.env.example services/chip-service/.env
+cp services/fingerprints-service/.env.example services/fingerprints-service/.env
 cp services/payment-service/.env.example services/payment-service/.env
 cp services/access-control-service/.env.example services/access-control-service/.env
 cp apps/dashboard/.env.example apps/dashboard/.env
@@ -410,7 +410,7 @@ In `services/access-control-service/.env`:
 
 ```env
 HARDWARE_SERVICE_URL=http://<PI_LAN_IP>:8000
-CHIP_SERVICE_URL=http://chip-service:8000
+FINGERPRINTS_SERVICE_URL=http://fingerprints-service:8000
 ```
 
 Start the backend:
@@ -499,6 +499,30 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --bui
 
 **Live reload (localhost):** `docker compose up` auto-loads `docker-compose.override.yml`. Change Python or dashboard files and services reload in place. Rebuild only when dependencies (`requirements.txt` / `package.json`) change.
 
+## Mock card top-up (local dev)
+
+For local Docker without Nedarim credentials or Cloudflare Tunnel:
+
+```env
+# services/payment-service/.env
+PAYMENT_MODE=mock
+# PUBLIC_BASE_URL not required
+# NEDARIM_MOSAD / NEDARIM_API_VALID not required
+```
+
+```bash
+docker compose up --build
+```
+
+1. Open `http://localhost` (localhost works in mock mode — no Nedarim iframe).
+2. Trigger a fingerprint top-up (insufficient balance) → **Credit card**.
+3. Pick an amount → click **סימולציית תשלום** (dev mock).
+4. Balance credits via the same server callback path as production.
+
+Verify: `GET /api/payments/healthz` → `"payment_mode": "mock"`.
+
+For real Nedarim clearing, set `PAYMENT_MODE=nedarim` and configure the tunnel below.
+
 ## Nedarim Plus card top-up (Cloudflare Tunnel)
 
 Card top-up needs a **public HTTPS origin**:
@@ -519,7 +543,7 @@ docker compose --profile tunnel up -d --build
 docker compose -f deploy/docker-compose.server.yml --project-directory . --env-file .env --profile tunnel up -d --build
 ```
 
-5. Confirm `GET /api/payments/healthz` shows `public_base_url_set: true` and `nedarim_configured: true`.
+5. Confirm `GET /api/payments/healthz` shows `payment_mode: "nedarim"`, `public_base_url_set: true`, and `nedarim_configured: true`.
 
 Path-filtered ingress example: `deploy/cloudflared/config.example.yml`.
 
@@ -544,7 +568,7 @@ gate-system/
     dashboard/                 # React TS app
   services/
     access-control-service/
-    chip-service/
+    fingerprints-service/
     hardware-service/
     payment-service/           # Nedarim Plus top-up + legacy charge stub
   shared/

@@ -34,7 +34,7 @@ refund(attempt_id, chip_id, amount_cents, correlation_id) -> RefundResult
 #   refund -> "access-refund:{attempt_id}"
 ```
 
-Maps to existing chip-service:
+Maps to existing fingerprints-service:
 
 ```http
 POST /chips/{chip_id}/balance/adjust

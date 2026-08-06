@@ -37,7 +37,7 @@ Unknown / disabled / insufficient (pre-check and post-adjust) repeat the same `A
 
 ### 5. `publish` typing is inconsistent
 
-`CashSession` uses `PublishFn`; `process_chip_access` and `process_cash_inserted` leave `publish` untyped.
+`CashSession` uses `PublishFn`; `process_cash_inserted` leaves `publish` untyped.
 
 **Possible direction**
 

@@ -13,10 +13,10 @@ from .hardware import MockHardwareAdapter, RpiHardwareAdapter
 from .schemas import (
     DoorOpenRequest,
     DoorOpenResponse,
+    FingerprintDeleteRequest,
     FingerprintEnrollRequest,
     SimulateCashRequest,
     SimulateFingerprintRequest,
-    SimulateRfidRequest,
 )
 from .settings import settings
 
@@ -261,16 +261,17 @@ async def cancel_fingerprint_enroll():
     return None
 
 
-# Dev endpoints (mock mode)
-@app.post("/dev/rfid/scan", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
-async def dev_scan(req: SimulateRfidRequest):
-    """Simulate an RFID scan in mock mode only."""
-    if settings.hardware_mode != "mock":
-        return None
-    await adapter.simulate_rfid_scan(req.uid)
+@app.post("/fingerprint/delete", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_fingerprint(req: FingerprintDeleteRequest):
+    """Remove a stored fingerprint template from the sensor."""
+    try:
+        await adapter.delete_fingerprint(req.slot)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
     return None
 
 
+# Dev endpoints (mock mode)
 @app.post("/dev/cash/insert", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
 async def dev_cash(req: SimulateCashRequest):
     """Simulate cash insertion in mock mode only."""

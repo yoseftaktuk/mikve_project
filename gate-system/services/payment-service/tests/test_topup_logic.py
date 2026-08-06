@@ -42,7 +42,7 @@ class FakeDb:
         return self.rows.get(key)
 
 
-class FakeChipClient:
+class FakeFingerprintsClient:
     def __init__(self, chips: dict[str, ChipValidation] | None = None) -> None:
         self.chips = chips or {}
 
@@ -53,13 +53,22 @@ class FakeChipClient:
 
 
 @dataclass
-class FakeNedarimClient:
+class FakePaymentProvider:
     result: CreateTransactionResult | None = None
     error: NedarimError | None = None
     calls: list[CreateTransactionCommand] | None = None
+    iframe_url_value: str = "https://www.matara.pro/nedarimplus/iframe/"
 
     def __post_init__(self) -> None:
         self.calls = []
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    @property
+    def iframe_url(self) -> str:
+        return self.iframe_url_value
 
     async def create_transaction(self, command: CreateTransactionCommand) -> CreateTransactionResult:
         assert self.calls is not None
@@ -72,6 +81,7 @@ class FakeNedarimClient:
 
 @pytest.fixture
 def public_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.topup_logic.settings.payment_mode", "nedarim")
     monkeypatch.setattr("app.topup_logic.settings.public_base_url", "https://gate.example.org")
     monkeypatch.setattr("app.topup_logic.settings.nedarim_groupe", "כניסה")
     monkeypatch.setattr("app.topup_logic.settings.nedarim_iframe_url", "https://www.matara.pro/nedarimplus/iframe/")
@@ -92,14 +102,14 @@ def enabled_chip(uid: str = "FP-001", balance: int = 0) -> ChipValidation:
 async def test_create_card_topup_happy_path(public_url: None) -> None:
     chip = enabled_chip()
     db = FakeDb()
-    nedarim = FakeNedarimClient(result=CreateTransactionResult(transaction_id="NED-1"))
+    nedarim = FakePaymentProvider(result=CreateTransactionResult(transaction_id="NED-1"))
 
     created = await create_card_topup(
         chip_uid=chip.uid,
         amount_cents=5000,
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeChipClient({chip.uid: chip}),  # type: ignore[arg-type]
-        nedarim_client=nedarim,  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        payment_provider=nedarim,  # type: ignore[arg-type]
     )
 
     assert created.nedarim_transaction_id == "NED-1"
@@ -127,8 +137,8 @@ async def test_create_rejects_amount_outside_presets(public_url: None) -> None:
             chip_uid=chip.uid,
             amount_cents=1234,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeChipClient({chip.uid: chip}),  # type: ignore[arg-type]
-            nedarim_client=FakeNedarimClient(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
+            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "invalid_amount"
 
@@ -140,8 +150,8 @@ async def test_create_rejects_unknown_chip(public_url: None) -> None:
             chip_uid="FP-999",
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeChipClient(),  # type: ignore[arg-type]
-            nedarim_client=FakeNedarimClient(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
+            chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
+            payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "chip_not_found"
 
@@ -159,14 +169,15 @@ async def test_create_rejects_disabled_chip(public_url: None) -> None:
             chip_uid=chip.uid,
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeChipClient({chip.uid: chip}),  # type: ignore[arg-type]
-            nedarim_client=FakeNedarimClient(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
+            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "chip_disabled"
 
 
 @pytest.mark.asyncio
 async def test_create_requires_public_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.topup_logic.settings.payment_mode", "nedarim")
     monkeypatch.setattr("app.topup_logic.settings.public_base_url", "")
     monkeypatch.setattr("app.topup_logic.settings.topup_amounts_cents", "2000,5000,10000")
     chip = enabled_chip()
@@ -175,8 +186,8 @@ async def test_create_requires_public_base_url(monkeypatch: pytest.MonkeyPatch) 
             chip_uid=chip.uid,
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeChipClient({chip.uid: chip}),  # type: ignore[arg-type]
-            nedarim_client=FakeNedarimClient(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
+            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "public_base_url_missing"
 
@@ -185,15 +196,15 @@ async def test_create_requires_public_base_url(monkeypatch: pytest.MonkeyPatch) 
 async def test_create_marks_failed_when_nedarim_rejects(public_url: None) -> None:
     chip = enabled_chip()
     db = FakeDb()
-    nedarim = FakeNedarimClient(error=NedarimError("nedarim_rejected", "institution closed"))
+    nedarim = FakePaymentProvider(error=NedarimError("nedarim_rejected", "institution closed"))
 
     with pytest.raises(AppError) as exc:
         await create_card_topup(
             chip_uid=chip.uid,
             amount_cents=2000,
             db=db,  # type: ignore[arg-type]
-            chip_client=FakeChipClient({chip.uid: chip}),  # type: ignore[arg-type]
-            nedarim_client=nedarim,  # type: ignore[arg-type]
+            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            payment_provider=nedarim,  # type: ignore[arg-type]
         )
     assert exc.value.code == "nedarim_rejected"
     assert len(db.rows) == 1
@@ -211,8 +222,8 @@ async def test_get_and_abandon(public_url: None) -> None:
         chip_uid=chip.uid,
         amount_cents=2000,
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeChipClient({chip.uid: chip}),  # type: ignore[arg-type]
-        nedarim_client=FakeNedarimClient(result=CreateTransactionResult("NED-2")),  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        payment_provider=FakePaymentProvider(result=CreateTransactionResult("NED-2")),  # type: ignore[arg-type]
     )
     loaded = await get_card_topup(created.topup_id, db)  # type: ignore[arg-type]
     assert loaded.status == STATUS_PENDING

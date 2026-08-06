@@ -110,6 +110,25 @@ class FingerprintController:
         """Ask a running enrollment to stop at its next checkpoint."""
         self._enroll_cancel.set()
 
+    def delete_template_sync(self, slot: int) -> None:
+        """Remove a stored template from the sensor. Idempotent if the slot is empty."""
+        if self._enroll_active.is_set():
+            raise RuntimeError("cannot_delete_while_enrolling")
+        with self._sensor_lock:
+            sensor = self._ensure_sensor()
+            if sensor is None:
+                raise RuntimeError("fingerprint_reader_unavailable")
+            try:
+                sensor.deleteTemplate(int(slot))
+            except Exception as exc:
+                # Some firmwares raise when the slot is already empty; treat as success.
+                message = str(exc).lower()
+                if "empty" in message or "not used" in message or "no finger" in message:
+                    logger.info("fingerprint_delete_slot_already_empty slot=%s", slot)
+                    return
+                raise
+            logger.info("fingerprint_template_deleted slot=%s", slot)
+
     def _dispatch(self, coro: Awaitable[None]) -> None:
         asyncio.run_coroutine_threadsafe(coro, self._loop)
 

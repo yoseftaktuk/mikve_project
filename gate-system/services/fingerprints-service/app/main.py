@@ -4,7 +4,7 @@ import logging
 import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gate_shared.errors import AppError, ErrorResponse
@@ -18,8 +18,10 @@ from .schemas import (
     ChipActivityResponse,
     ChipAssignRequest,
     ChipCreateRequest,
+    ChipListItemResponse,
     ChipRenameRequest,
     ChipResponse,
+    ChipUpdateRequest,
     ValidateChipRequest,
     ValidateChipResponse,
 )
@@ -28,7 +30,7 @@ from .settings import settings
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Chip Service",
+    title="Fingerprints Service",
     version="0.1.0",
     openapi_url="/openapi.json",
     docs_url="/docs",
@@ -44,6 +46,21 @@ async def startup() -> None:
     global redis_client
     configure_logging(settings.service_name, settings.log_level)
     async with engine.begin() as conn:
+        # Existing volumes may still have chip_service from before the rename.
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'chip_service')
+                 AND NOT EXISTS (
+                   SELECT 1 FROM information_schema.schemata WHERE schema_name = '{settings.postgres_schema}'
+                 ) THEN
+                EXECUTE 'ALTER SCHEMA chip_service RENAME TO {settings.postgres_schema}';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {settings.postgres_schema}")
         await conn.run_sync(Base.metadata.create_all)
         # The project has no migration tool, so databases created before holder_name
         # existed need this idempotent catch-up.
@@ -93,7 +110,7 @@ async def _publish(event: dict) -> None:
     await redis_client.publish("chip.events", json.dumps(event))
 
 
-@app.post("/chips", response_model=ChipResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/fingerprints", response_model=ChipResponse, status_code=status.HTTP_201_CREATED)
 async def create_chip(req: ChipCreateRequest, db: AsyncSession = Depends(get_db)):
     """Register a new chip UID with a zero balance."""
     existing = await db.scalar(select(Chip).where(Chip.uid == req.uid))
@@ -117,7 +134,32 @@ async def create_chip(req: ChipCreateRequest, db: AsyncSession = Depends(get_db)
     return ChipResponse.model_validate(chip, from_attributes=True)
 
 
-@app.get("/chips/{chip_id}", response_model=ChipResponse)
+@app.get("/fingerprints", response_model=list[ChipListItemResponse])
+async def list_chips(db: AsyncSession = Depends(get_db)):
+    """List registered chips with balances, newest first."""
+    rows = (
+        await db.execute(
+            select(Chip, Balance.amount_cents)
+            .outerjoin(Balance, Balance.chip_id == Chip.id)
+            .order_by(Chip.created_at.desc())
+        )
+    ).all()
+    items: list[ChipListItemResponse] = []
+    for chip, amount_cents in rows:
+        items.append(
+            ChipListItemResponse(
+                id=chip.id,
+                uid=chip.uid,
+                holder_name=chip.holder_name,
+                is_enabled=chip.is_enabled,
+                balance_cents=int(amount_cents or 0),
+                created_at=chip.created_at,
+            )
+        )
+    return items
+
+
+@app.get("/fingerprints/{chip_id}", response_model=ChipResponse)
 async def get_chip(chip_id: str, db: AsyncSession = Depends(get_db)):
     """Return chip metadata by internal chip ID."""
     chip = await db.get(Chip, chip_id)
@@ -126,7 +168,67 @@ async def get_chip(chip_id: str, db: AsyncSession = Depends(get_db)):
     return ChipResponse.model_validate(chip, from_attributes=True)
 
 
-@app.patch("/chips/{chip_id}/assign", response_model=ChipResponse)
+@app.patch("/fingerprints/{chip_id}", response_model=ChipListItemResponse)
+async def update_chip(chip_id: str, req: ChipUpdateRequest, db: AsyncSession = Depends(get_db)):
+    """Update holder name and/or enabled flag for a registered chip."""
+    fields = req.model_fields_set
+    if "holder_name" not in fields and "is_enabled" not in fields:
+        raise AppError(code="no_fields", message="Provide holder_name and/or is_enabled", http_status=400)
+    chip = await db.get(Chip, chip_id)
+    if not chip:
+        raise HTTPException(status_code=404, detail="chip_not_found")
+
+    if "holder_name" in fields:
+        holder_name = req.holder_name.strip() if req.holder_name else None
+        chip.holder_name = holder_name or None
+        db.add(
+            ChipActivity(
+                chip_id=chip.id,
+                event_type="rename",
+                delta_cents=0,
+                description=f"holder_name={chip.holder_name or ''}",
+            )
+        )
+
+    if "is_enabled" in fields and req.is_enabled is not None and req.is_enabled != chip.is_enabled:
+        chip.is_enabled = req.is_enabled
+        db.add(
+            ChipActivity(
+                chip_id=chip.id,
+                event_type="enable" if chip.is_enabled else "disable",
+                delta_cents=0,
+                description=f"is_enabled={chip.is_enabled}",
+            )
+        )
+
+    await db.commit()
+    await db.refresh(chip)
+    bal = await db.get(Balance, chip.id)
+    return ChipListItemResponse(
+        id=chip.id,
+        uid=chip.uid,
+        holder_name=chip.holder_name,
+        is_enabled=chip.is_enabled,
+        balance_cents=int(bal.amount_cents if bal else 0),
+        created_at=chip.created_at,
+    )
+
+
+@app.delete("/fingerprints/{chip_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_chip(chip_id: str, db: AsyncSession = Depends(get_db)):
+    """Remove a chip, its balance, and activity history."""
+    chip = await db.get(Chip, chip_id)
+    if not chip:
+        raise HTTPException(status_code=404, detail="chip_not_found")
+    await db.execute(delete(ChipActivity).where(ChipActivity.chip_id == chip.id))
+    await db.execute(delete(Balance).where(Balance.chip_id == chip.id))
+    await db.delete(chip)
+    await db.commit()
+    await _publish({"type": "chip.deleted", "chip_id": chip_id, "uid": chip.uid})
+    return None
+
+
+@app.patch("/fingerprints/{chip_id}/assign", response_model=ChipResponse)
 async def assign_chip(chip_id: str, req: ChipAssignRequest, db: AsyncSession = Depends(get_db)):
     """Assign a chip to a user ID."""
     chip = await db.get(Chip, chip_id)
@@ -139,7 +241,7 @@ async def assign_chip(chip_id: str, req: ChipAssignRequest, db: AsyncSession = D
     return ChipResponse.model_validate(chip, from_attributes=True)
 
 
-@app.patch("/chips/{chip_id}/name", response_model=ChipResponse)
+@app.patch("/fingerprints/{chip_id}/name", response_model=ChipResponse)
 async def rename_chip(chip_id: str, req: ChipRenameRequest, db: AsyncSession = Depends(get_db)):
     """Set or clear the holder name shown on scans and management screens."""
     chip = await db.get(Chip, chip_id)
@@ -160,7 +262,7 @@ async def rename_chip(chip_id: str, req: ChipRenameRequest, db: AsyncSession = D
     return ChipResponse.model_validate(chip, from_attributes=True)
 
 
-@app.get("/chips/{chip_id}/balance", response_model=BalanceResponse)
+@app.get("/fingerprints/{chip_id}/balance", response_model=BalanceResponse)
 async def get_balance(chip_id: str, db: AsyncSession = Depends(get_db)):
     """Return the current balance for a chip."""
     bal = await db.get(Balance, chip_id)
@@ -169,7 +271,7 @@ async def get_balance(chip_id: str, db: AsyncSession = Depends(get_db)):
     return BalanceResponse.model_validate(bal, from_attributes=True)
 
 
-@app.post("/chips/{chip_id}/balance/adjust", response_model=BalanceResponse)
+@app.post("/fingerprints/{chip_id}/balance/adjust", response_model=BalanceResponse)
 async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSession = Depends(get_db)):
     """Apply a positive or negative balance delta and record activity.
 
@@ -205,7 +307,7 @@ async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSessi
     return BalanceResponse.model_validate(bal, from_attributes=True)
 
 
-@app.post("/chips/validate", response_model=ValidateChipResponse)
+@app.post("/fingerprints/validate", response_model=ValidateChipResponse)
 async def validate(req: ValidateChipRequest, db: AsyncSession = Depends(get_db)):
     """Look up a chip by UID and return enablement plus balance."""
     chip = await db.scalar(select(Chip).where(Chip.uid == req.uid))
@@ -226,7 +328,7 @@ async def validate(req: ValidateChipRequest, db: AsyncSession = Depends(get_db))
     )
 
 
-@app.get("/chips/{chip_id}/activity", response_model=list[ChipActivityResponse])
+@app.get("/fingerprints/{chip_id}/activity", response_model=list[ChipActivityResponse])
 async def activity(chip_id: str, db: AsyncSession = Depends(get_db)):
     """Return chip activity history newest first."""
     rows = (await db.execute(select(ChipActivity).where(ChipActivity.chip_id == chip_id).order_by(ChipActivity.id.desc()))).scalars().all()

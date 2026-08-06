@@ -17,7 +17,7 @@ class DoorRejectedError(Exception):
 
 @dataclass(frozen=True)
 class ChipValidation:
-    """Chip details returned by the chip-service validate endpoint."""
+    """Ledger details returned by the fingerprints-service validate endpoint."""
 
     chip_id: str
     uid: str
@@ -27,16 +27,28 @@ class ChipValidation:
     holder_name: str | None = None
 
 
-class ChipClient:
-    """HTTP client for chip-service registration, validation, and balance changes."""
+@dataclass(frozen=True)
+class LedgerUser:
+    """Registered ledger user with balance for management lists."""
+
+    chip_id: str
+    uid: str
+    holder_name: str | None
+    is_enabled: bool
+    balance_cents: int
+    created_at: str | None = None
+
+
+class FingerprintsClient:
+    """HTTP client for fingerprints-service registration, validation, and balance changes."""
 
     def __init__(self) -> None:
-        self._base = settings.chip_service_url.rstrip("/")
+        self._base = settings.fingerprints_service_url.rstrip("/")
 
     async def register(self, uid: str, holder_name: str | None = None) -> None:
-        """Create a chip record for the given UID if it does not already exist."""
+        """Create a ledger record for the given UID if it does not already exist."""
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/chips", json={"uid": uid, "holder_name": holder_name})
+            resp = await client.post(f"{self._base}/fingerprints", json={"uid": uid, "holder_name": holder_name})
         if resp.status_code == 400:
             return
         resp.raise_for_status()
@@ -45,14 +57,93 @@ class ChipClient:
         """Set the holder name shown on scans and management screens."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.patch(
-                f"{self._base}/chips/{chip_id}/name", json={"holder_name": holder_name}
+                f"{self._base}/fingerprints/{chip_id}/name", json={"holder_name": holder_name}
             )
         resp.raise_for_status()
 
-    async def validate(self, uid: str) -> ChipValidation:
-        """Fetch chip status and balance by UID."""
+    async def list_users(self) -> list[LedgerUser]:
+        """List all registered ledger users with balances."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{self._base}/fingerprints")
+        resp.raise_for_status()
+        rows = resp.json()
+        return [
+            LedgerUser(
+                chip_id=str(row["id"]),
+                uid=row["uid"],
+                holder_name=row.get("holder_name"),
+                is_enabled=bool(row["is_enabled"]),
+                balance_cents=int(row.get("balance_cents") or 0),
+                created_at=row.get("created_at"),
+            )
+            for row in rows
+        ]
+
+    async def update_user(
+        self,
+        chip_id: str,
+        *,
+        holder_name: str | None = None,
+        is_enabled: bool | None = None,
+        set_holder_name: bool = False,
+        set_is_enabled: bool = False,
+    ) -> LedgerUser:
+        """Update holder name and/or enabled flag.
+
+        Use set_holder_name / set_is_enabled so clearing a name (null) is distinct from omit.
+        """
+        body: dict = {}
+        if set_holder_name:
+            body["holder_name"] = holder_name
+        if set_is_enabled:
+            body["is_enabled"] = is_enabled
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/chips/validate", json={"uid": uid})
+            resp = await client.patch(f"{self._base}/fingerprints/{chip_id}", json=body)
+        if resp.status_code == 404:
+            raise ValueError("chip_not_found")
+        if resp.status_code == 400:
+            raise ValueError("no_fields")
+        resp.raise_for_status()
+        row = resp.json()
+        return LedgerUser(
+            chip_id=str(row["id"]),
+            uid=row["uid"],
+            holder_name=row.get("holder_name"),
+            is_enabled=bool(row["is_enabled"]),
+            balance_cents=int(row.get("balance_cents") or 0),
+            created_at=row.get("created_at"),
+        )
+
+    async def delete_user(self, chip_id: str) -> None:
+        """Delete a ledger user and related balance/activity."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.delete(f"{self._base}/fingerprints/{chip_id}")
+        if resp.status_code == 404:
+            raise ValueError("chip_not_found")
+        resp.raise_for_status()
+
+    async def get_by_id(self, chip_id: str) -> LedgerUser | None:
+        """Fetch a single chip by id; None if missing."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{self._base}/fingerprints/{chip_id}")
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        row = resp.json()
+        # Balance is not on ChipResponse; list/update include it. Fall back via validate.
+        return LedgerUser(
+            chip_id=str(row["id"]),
+            uid=row["uid"],
+            holder_name=row.get("holder_name"),
+            is_enabled=bool(row["is_enabled"]),
+            balance_cents=0,
+            created_at=row.get("created_at"),
+        )
+
+    async def validate(self, uid: str) -> ChipValidation:
+        """Fetch ledger status and balance by UID."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(f"{self._base}/fingerprints/validate", json={"uid": uid})
         if resp.status_code == 404:
             raise ValueError("chip_not_found")
         resp.raise_for_status()
@@ -80,7 +171,7 @@ class ChipClient:
             body["idempotency_key"] = idempotency_key
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
-                f"{self._base}/chips/{chip_id}/balance/adjust",
+                f"{self._base}/fingerprints/{chip_id}/balance/adjust",
                 json=body,
             )
         if resp.status_code == 409:
@@ -136,4 +227,12 @@ class HardwareClient:
         """Abort a running fingerprint enrollment."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(f"{self._base}/fingerprint/enroll/cancel")
+        resp.raise_for_status()
+
+    async def delete_fingerprint(self, slot: int) -> None:
+        """Remove a fingerprint template from the sensor by slot."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{self._base}/fingerprint/delete", json={"slot": slot})
+        if resp.status_code == 503:
+            raise HardwareUnavailableError(resp.text)
         resp.raise_for_status()

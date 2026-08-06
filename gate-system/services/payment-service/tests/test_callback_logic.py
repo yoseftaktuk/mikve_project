@@ -78,7 +78,7 @@ class FakeDb:
         return FakeResult(rowcount=matched)
 
 
-class FakeChipClient:
+class FakeFingerprintsClient:
     def __init__(self, balance: int = 0) -> None:
         self.balance = balance
         self.adjustments: list[tuple[str, int, str, str | None]] = []
@@ -97,7 +97,7 @@ class FakeChipClient:
     ) -> int:
         self.adjustments.append((chip_id, delta_cents, reason, idempotency_key))
         if self.fail:
-            raise RuntimeError("chip-service down")
+            raise RuntimeError("fingerprints-service down")
         # Same key → no second credit.
         keys = [a[3] for a in self.adjustments[:-1]]
         if idempotency_key and idempotency_key in keys:
@@ -145,7 +145,7 @@ async def test_callback_credits_once() -> None:
     db = FakeDb()
     topup = pending_topup()
     db.add(topup)
-    chip = FakeChipClient(balance=100)
+    chip = FakeFingerprintsClient(balance=100)
     events: list[dict] = []
 
     async def publish(event: dict) -> None:
@@ -174,7 +174,7 @@ async def test_duplicate_callback_is_idempotent() -> None:
     db = FakeDb()
     topup = pending_topup()
     db.add(topup)
-    chip = FakeChipClient()
+    chip = FakeFingerprintsClient()
 
     first = await process_nedarim_callback(
         topup_id=topup.id,
@@ -201,7 +201,7 @@ async def test_callback_rejects_foreign_ip() -> None:
     db = FakeDb()
     topup = pending_topup()
     db.add(topup)
-    chip = FakeChipClient()
+    chip = FakeFingerprintsClient()
 
     result = await process_nedarim_callback(
         topup_id=topup.id,
@@ -229,7 +229,7 @@ async def test_callback_rejects_amount_mismatch() -> None:
         payload=ok_payload(topup, amount="20"),
         source_ip="18.196.146.117",
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeChipClient(),  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
     )
     assert result.code == "amount_mismatch"
     assert topup.status == STATUS_PENDING
@@ -243,7 +243,7 @@ async def test_callback_unknown_topup() -> None:
         payload={"TransactionId": "1", "Amount": "50"},
         source_ip="18.196.146.117",
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeChipClient(),  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
     )
     assert result.code == "unknown_topup"
     assert result.http_status == 404
@@ -258,7 +258,7 @@ async def test_callback_rejects_foreign_ip_before_topup_lookup() -> None:
         payload={"TransactionId": "1", "Amount": "50"},
         source_ip="1.2.3.4",
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeChipClient(),  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
     )
     assert result.code == "bad_ip"
     assert result.http_status == 403
@@ -277,7 +277,7 @@ async def test_callback_rejects_abandoned() -> None:
         payload=ok_payload(topup),
         source_ip="18.196.146.117",
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeChipClient(),  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
     )
     assert result.code == "not_pending"
     assert result.http_status == 409
@@ -294,7 +294,7 @@ async def test_callback_id_mismatch() -> None:
         payload=ok_payload(topup, transaction_id="OTHER"),
         source_ip="18.196.146.117",
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeChipClient(),  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
     )
     assert result.code == "id_mismatch"
     assert topup.status == STATUS_PENDING
@@ -306,7 +306,7 @@ async def test_crediting_retry_after_chip_failure() -> None:
     topup = pending_topup()
     topup.status = STATUS_CREDITING
     db.add(topup)
-    chip = FakeChipClient()
+    chip = FakeFingerprintsClient()
     chip.fail = True
 
     failed = await process_nedarim_callback(

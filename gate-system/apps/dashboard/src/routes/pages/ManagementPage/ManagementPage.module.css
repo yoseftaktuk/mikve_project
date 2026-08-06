@@ -101,3 +101,111 @@
   margin: 0 auto;
   width: 100%;
 }
+
+.usersCard {
+  grid-column: 1 / -1;
+}
+
+.usersHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.usersHeader .sectionTitle,
+.usersHeader h2 {
+  margin: 0;
+}
+
+.refreshButton {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.7rem;
+  font-size: var(--text-fluid-sm);
+  border-radius: 0.55rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.refreshButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.userList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.userRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.userMeta {
+  flex: 1 1 10rem;
+  text-align: right;
+  min-width: 0;
+}
+
+.userName {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--text-fluid-base);
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.userSub {
+  margin-top: 0.15rem;
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+}
+
+.badgeDisabled {
+  font-size: clamp(0.65rem, 1.3dvh, 0.75rem);
+  font-weight: 500;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.4rem;
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.editForm {
+  width: 100%;
+}
+
+.checkboxField {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0.5rem;
+  font-size: var(--text-fluid-sm);
+  color: var(--text-h);
+}
+
+.dangerButton {
+  border-color: #fca5a5 !important;
+  color: #b91c1c;
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: #fef2f2;
+}

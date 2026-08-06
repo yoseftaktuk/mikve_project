@@ -1,8 +1,8 @@
 import axios from 'axios'
 import { API_BASE } from './config'
-import type { ChargeChipRequest, ChargeChipResponse } from '../types/chargeChip'
 import type {
   CardTopupCreateResponse,
+  CardTopupSimulatePayResponse,
   CardTopupStatusResponse,
   PaymentHealthResponse,
 } from '../types/topup'
@@ -12,12 +12,6 @@ export const paymentsApi = axios.create({
   baseURL: API_BASE,
   timeout: 30_000,
 })
-
-/** Charge a chip balance through the legacy stub (does not credit balance). */
-export async function chargeChip(body: ChargeChipRequest): Promise<ChargeChipResponse> {
-  const res = await paymentsApi.post<ChargeChipResponse>('/payments/charge-chip', body)
-  return res.data
-}
 
 /** Open a server-side Nedarim transaction for a chip top-up. */
 export async function createCardTopup(body: {
@@ -42,9 +36,17 @@ export async function abandonCardTopup(topupId: string): Promise<CardTopupStatus
   return res.data
 }
 
-/** Preset amounts and Nedarim readiness from payment-service. */
+/** Preset amounts and payment provider readiness from payment-service. */
 export async function getPaymentHealth(): Promise<PaymentHealthResponse> {
   const res = await paymentsApi.get<PaymentHealthResponse>('/payments/healthz')
+  return res.data
+}
+
+/** Mock mode only: simulate a successful card payment and credit the chip. */
+export async function simulateCardTopupPay(topupId: string): Promise<CardTopupSimulatePayResponse> {
+  const res = await paymentsApi.post<CardTopupSimulatePayResponse>(
+    `/payments/dev/card-topups/${topupId}/simulate-pay`,
+  )
   return res.data
 }
 

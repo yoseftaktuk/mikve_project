@@ -9,7 +9,7 @@ from .settings import settings
 
 @dataclass(frozen=True)
 class ChipValidation:
-    """Chip details returned by the chip-service validate endpoint."""
+    """Ledger details returned by the fingerprints-service validate endpoint."""
 
     chip_id: str
     uid: str
@@ -18,16 +18,16 @@ class ChipValidation:
     holder_name: str | None = None
 
 
-class ChipClient:
-    """HTTP client for chip-service lookups and balance changes."""
+class FingerprintsClient:
+    """HTTP client for fingerprints-service lookups and balance changes."""
 
     def __init__(self) -> None:
-        self._base = settings.chip_service_url.rstrip("/")
+        self._base = settings.fingerprints_service_url.rstrip("/")
 
     async def validate(self, uid: str) -> ChipValidation:
-        """Fetch chip status and balance by UID."""
+        """Fetch ledger status and balance by UID."""
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/chips/validate", json={"uid": uid})
+            resp = await client.post(f"{self._base}/fingerprints/validate", json={"uid": uid})
         if resp.status_code == 404:
             raise ValueError("chip_not_found")
         resp.raise_for_status()
@@ -57,7 +57,7 @@ class ChipClient:
         if idempotency_key:
             body["idempotency_key"] = idempotency_key
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/chips/{chip_id}/balance/adjust", json=body)
+            resp = await client.post(f"{self._base}/fingerprints/{chip_id}/balance/adjust", json=body)
         if resp.status_code == 409:
             raise ValueError("insufficient_balance")
         if resp.status_code == 404:

@@ -48,7 +48,7 @@ Residual risks after adopting the design in this pack. Accepted or mitigated as 
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| MANUAL_REVIEW pile-up if chip-service down | Staff load; unpaid visitors | Alerts; runbook; refund retries; health checks |
+| MANUAL_REVIEW pile-up if fingerprints-service down | Staff load; unpaid visitors | Alerts; runbook; refund retries; health checks |
 | Ephemeral quick-tunnel / public URL unrelated | — | Not part of entrance saga |
 | Config too aggressive timeouts | False door failures → unnecessary refunds | Tune `DOOR_*` on real Pi; metrics on false positives |
 

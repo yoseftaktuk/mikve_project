@@ -8,6 +8,9 @@ class Settings(CommonSettings):
     jwt_secret: str = "not_used"
     postgres_schema: str = "payment_service"
 
+    # mock: fake card clearing for local dev; nedarim: real Nedarim Plus integration.
+    payment_mode: str = Field(default="mock", alias="PAYMENT_MODE")
+
     # Nedarim Plus institution credentials. ApiValid is all the server-side
     # transaction flow needs; ApiPassword (which can pull data out of the
     # institution) is intentionally never stored here.

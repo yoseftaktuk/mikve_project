@@ -13,9 +13,9 @@ services:
     volumes:
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
 
-  chip-service:
+  fingerprints-service:
     volumes:
-      - ./services/chip-service:/app
+      - ./services/fingerprints-service:/app
       - ./shared/py:/app/shared/py
     command:
       [

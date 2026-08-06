@@ -30,9 +30,17 @@ export type CardTopupStatusResponse = {
 
 export type PaymentHealthResponse = {
   status: string
+  payment_mode?: 'mock' | 'nedarim'
   topup_amounts_cents: number[]
   nedarim_configured?: boolean
   public_base_url_set?: boolean
+}
+
+export type CardTopupSimulatePayResponse = {
+  status: string
+  code: string
+  message: string
+  balance_after_cents?: number | null
 }
 
 export type NedarimTransactionResponse = {

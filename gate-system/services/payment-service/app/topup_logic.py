@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gate_shared.errors import AppError
 
-from .clients import ChipClient
+from .clients import FingerprintsClient
 from .models import (
     STATUS_ABANDONED,
     STATUS_CREDITING,
@@ -27,12 +27,14 @@ from .models import (
     NedarimCallback,
 )
 from .nedarim_plus import (
+    NEDARIM_CALLBACK_IPS,
     CreateTransactionCommand,
     NedarimError,
-    NedarimPlusClient,
     assert_callback_source_ip,
+    shekels_from_cents,
     verify_callback,
 )
+from .payment_provider import PaymentProvider
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -85,8 +87,8 @@ async def create_card_topup(
     chip_uid: str,
     amount_cents: int,
     db: AsyncSession,
-    chip_client: ChipClient,
-    nedarim_client: NedarimPlusClient,
+    chip_client: FingerprintsClient,
+    payment_provider: PaymentProvider,
 ) -> CreatedCardTopup:
     """Resolve the chip, open a pending top-up, and create the Nedarim transaction.
 
@@ -94,8 +96,7 @@ async def create_card_topup(
     cannot alter what the cardholder is charged.
     """
     _require_allowed_amount(amount_cents)
-    # Fail early if the tunnel hostname is missing — before we touch the DB or Nedarim.
-    if not settings.public_base_url.strip():
+    if settings.payment_mode != "mock" and not settings.public_base_url.strip():
         raise AppError(
             code="public_base_url_missing",
             message="PUBLIC_BASE_URL is not set; Nedarim cannot deliver the callback",
@@ -125,9 +126,14 @@ async def create_card_topup(
     db.add(topup)
     await db.flush()
 
+    callback_url = (
+        _callback_url(topup.id)
+        if settings.payment_mode != "mock"
+        else f"mock://local/card-topups/{topup.id}"
+    )
     command = CreateTransactionCommand(
         amount_cents=amount_cents,
-        callback_url=_callback_url(topup.id),
+        callback_url=callback_url,
         ajax_id=topup.ajax_id,
         param1=str(topup.id),
         comment=f"gate top-up {chip.uid}",
@@ -135,7 +141,7 @@ async def create_card_topup(
     )
 
     try:
-        result = await nedarim_client.create_transaction(command)
+        result = await payment_provider.create_transaction(command)
     except NedarimError as exc:
         topup.status = STATUS_FAILED
         topup.error_code = exc.code
@@ -162,10 +168,67 @@ async def create_card_topup(
     return CreatedCardTopup(
         topup_id=topup.id,
         nedarim_transaction_id=result.transaction_id,
-        iframe_url=settings.nedarim_iframe_url,
+        iframe_url=payment_provider.iframe_url,
         amount_cents=topup.amount_cents,
         chip_uid=topup.chip_uid,
         chip_id=topup.chip_id,
+    )
+
+
+def _mock_callback_payload(topup: CardTopup) -> dict[str, Any]:
+    """Build a Nedarim-shaped callback body for mock simulate-pay."""
+    transaction_id = topup.nedarim_created_id or f"MOCK-{topup.id.hex[:12]}"
+    return {
+        "TransactionId": transaction_id,
+        "Amount": shekels_from_cents(topup.amount_cents),
+        "Currency": "1",
+        "Confirmation": "MOCK-CONF",
+        "LastNum": "4242",
+        "Param1": str(topup.id),
+    }
+
+
+async def simulate_mock_card_payment(
+    *,
+    topup_id: uuid.UUID,
+    db: AsyncSession,
+    chip_client: FingerprintsClient,
+    publish: PublishFn | None = None,
+) -> CallbackHandlingResult:
+    """Credit a pending mock top-up via the same callback path as production."""
+    if settings.payment_mode != "mock":
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=403,
+            code="mock_only",
+            message="Simulate pay is only available in mock payment mode",
+        )
+
+    topup = await db.get(CardTopup, topup_id)
+    if topup is None:
+        return CallbackHandlingResult(
+            accepted=False,
+            http_status=404,
+            code="topup_not_found",
+            message="Top-up not found",
+        )
+
+    if topup.status == STATUS_PAID:
+        return CallbackHandlingResult(
+            accepted=True,
+            http_status=200,
+            code="already_paid",
+            message="Top-up already paid",
+        )
+
+    mock_ip = next(iter(NEDARIM_CALLBACK_IPS))
+    return await process_nedarim_callback(
+        topup_id=topup_id,
+        payload=_mock_callback_payload(topup),
+        source_ip=mock_ip,
+        db=db,
+        chip_client=chip_client,
+        publish=publish,
     )
 
 
@@ -241,7 +304,7 @@ async def _credit_and_settle(
     topup: CardTopup,
     *,
     db: AsyncSession,
-    chip_client: ChipClient,
+    chip_client: FingerprintsClient,
     transaction_id: str,
     confirmation: str | None,
     last_num: str | None,
@@ -298,7 +361,7 @@ async def process_nedarim_callback(
     payload: dict[str, Any],
     source_ip: str | None,
     db: AsyncSession,
-    chip_client: ChipClient,
+    chip_client: FingerprintsClient,
     publish: PublishFn | None = None,
 ) -> CallbackHandlingResult:
     """Verify a CallBack and credit the balance. Safe to call more than once.
