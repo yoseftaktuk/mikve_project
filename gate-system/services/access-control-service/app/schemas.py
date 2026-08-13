@@ -30,6 +30,7 @@ class FingerprintApprovalRequest(BaseModel):
 
 class FingerprintEnrollRequest(BaseModel):
     holder_name: str = Field(min_length=2, max_length=80)
+    national_id: str = Field(min_length=1, max_length=9)
     initial_amount_cents: int = Field(default=0, ge=0, le=1_000_000)
 
 
@@ -40,6 +41,7 @@ class FingerprintEnrollCancelRequest(BaseModel):
 class FingerprintEnrollStartResponse(BaseModel):
     session_id: str
     holder_name: str
+    national_id: str
     initial_amount_cents: int
 
 

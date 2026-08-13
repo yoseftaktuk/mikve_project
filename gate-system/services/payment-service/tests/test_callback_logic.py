@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import pytest
 from sqlalchemy.sql.dml import Update
 
-from app.clients import ChipValidation
+from app.clients import ChipNationalIdMatch, ChipValidation
 from app.models import (
+    PRODUCT_BALANCE,
+    PRODUCT_MONTHLY_SUBSCRIPTION,
     STATUS_ABANDONED,
     STATUS_CREDITING,
     STATUS_PAID,
@@ -82,7 +84,11 @@ class FakeFingerprintsClient:
     def __init__(self, balance: int = 0) -> None:
         self.balance = balance
         self.adjustments: list[tuple[str, int, str, str | None]] = []
+        self.activations: list[dict] = []
         self.fail = False
+
+    async def lookup_by_national_id(self, national_id: str) -> ChipNationalIdMatch:
+        raise ValueError("chip_not_found")
 
     async def validate(self, uid: str) -> ChipValidation:
         raise NotImplementedError
@@ -105,13 +111,43 @@ class FakeFingerprintsClient:
         self.balance += delta_cents
         return self.balance
 
+    async def activate_subscription(
+        self,
+        chip_id: str,
+        *,
+        amount_cents: int,
+        nedarim_transaction_id: str,
+        hebrew_year: int,
+        hebrew_month: int,
+        hebrew_month_name: str,
+    ) -> int:
+        if self.fail:
+            raise RuntimeError("fingerprints-service down")
+        self.activations.append(
+            {
+                "chip_id": chip_id,
+                "amount_cents": amount_cents,
+                "nedarim_transaction_id": nedarim_transaction_id,
+                "hebrew_year": hebrew_year,
+                "hebrew_month": hebrew_month,
+                "hebrew_month_name": hebrew_month_name,
+            }
+        )
+        return self.balance
 
-def pending_topup(*, amount_cents: int = 5000, created_id: str = "NED-100") -> CardTopup:
+
+def pending_topup(
+    *,
+    amount_cents: int = 5000,
+    created_id: str = "NED-100",
+    product: str = PRODUCT_BALANCE,
+) -> CardTopup:
     return CardTopup(
         id=uuid.uuid4(),
         chip_id=uuid.UUID(chip_id_for("FP-001")),
-        chip_uid="FP-001",
+        fingerprint_uid="FP-001",
         amount_cents=amount_cents,
+        product=product,
         status=STATUS_PENDING,
         nedarim_created_id=created_id,
         ajax_id="ajax1",
@@ -284,20 +320,53 @@ async def test_callback_rejects_abandoned() -> None:
 
 
 @pytest.mark.asyncio
-async def test_callback_id_mismatch() -> None:
+async def test_callback_activates_subscription_without_balance_credit() -> None:
     db = FakeDb()
-    topup = pending_topup(created_id="NED-100")
+    topup = pending_topup(amount_cents=30000, product=PRODUCT_MONTHLY_SUBSCRIPTION)
+    db.add(topup)
+    chip = FakeFingerprintsClient(balance=1200)
+    events: list[dict] = []
+
+    async def publish(event: dict) -> None:
+        events.append(event)
+
+    result = await process_nedarim_callback(
+        topup_id=topup.id,
+        payload=ok_payload(topup, amount="300"),
+        source_ip="18.196.146.117",
+        db=db,  # type: ignore[arg-type]
+        chip_client=chip,  # type: ignore[arg-type]
+        publish=publish,
+    )
+    assert result.accepted is True
+    assert topup.status == STATUS_PAID
+    assert chip.adjustments == []
+    assert len(chip.activations) == 1
+    assert chip.activations[0]["nedarim_transaction_id"] == "NED-100"
+    assert chip.activations[0]["amount_cents"] == 30000
+    assert topup.balance_after_cents == 1200
+    assert events[0]["type"] == "subscription.paid"
+    assert events[0]["product"] == PRODUCT_MONTHLY_SUBSCRIPTION
+
+
+@pytest.mark.asyncio
+async def test_callback_accepts_cleared_id_different_from_create_id() -> None:
+    """Live Nedarim CallBack TransactionId can differ from CreateTransaction ID."""
+    db = FakeDb()
+    topup = pending_topup(created_id="1766827")
     db.add(topup)
 
     result = await process_nedarim_callback(
         topup_id=topup.id,
-        payload=ok_payload(topup, transaction_id="OTHER"),
-        source_ip="18.196.146.117",
+        payload=ok_payload(topup, transaction_id="76030570"),
+        source_ip="18.194.219.73",
         db=db,  # type: ignore[arg-type]
         chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
     )
-    assert result.code == "id_mismatch"
-    assert topup.status == STATUS_PENDING
+    assert result.accepted is True
+    assert result.code == "ok"
+    assert topup.status == STATUS_PAID
+    assert topup.nedarim_transaction_id == "76030570"
 
 
 @pytest.mark.asyncio

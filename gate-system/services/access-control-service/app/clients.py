@@ -25,6 +25,11 @@ class ChipValidation:
     assigned_user_id: str | None
     balance_cents: int
     holder_name: str | None = None
+    national_id: str | None = None
+    subscription_active: bool = False
+    subscription_month_name: str | None = None
+    subscription_free_entry_available_today: bool = False
+    current_hebrew_month_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,7 @@ class LedgerUser:
     holder_name: str | None
     is_enabled: bool
     balance_cents: int
+    national_id: str | None = None
     created_at: str | None = None
 
 
@@ -45,20 +51,49 @@ class FingerprintsClient:
     def __init__(self) -> None:
         self._base = settings.fingerprints_service_url.rstrip("/")
 
-    async def register(self, uid: str, holder_name: str | None = None) -> None:
+    async def register(
+        self,
+        uid: str,
+        holder_name: str | None = None,
+        national_id: str | None = None,
+    ) -> None:
         """Create a ledger record for the given UID if it does not already exist."""
+        body: dict = {"uid": uid, "holder_name": holder_name}
+        if national_id is not None:
+            body["national_id"] = national_id
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(f"{self._base}/fingerprints", json={"uid": uid, "holder_name": holder_name})
+            resp = await client.post(f"{self._base}/fingerprints", json=body)
+        if resp.status_code == 409:
+            raise ValueError("national_id_taken")
         if resp.status_code == 400:
+            detail = ""
+            try:
+                detail = str(resp.json().get("code") or "")
+            except Exception:
+                detail = ""
+            if detail == "national_id_taken":
+                raise ValueError("national_id_taken")
             return
         resp.raise_for_status()
 
-    async def rename(self, chip_id: str, holder_name: str | None) -> None:
-        """Set the holder name shown on scans and management screens."""
+    async def rename(
+        self,
+        chip_id: str,
+        holder_name: str | None,
+        *,
+        national_id: str | None = None,
+        set_national_id: bool = False,
+    ) -> None:
+        """Set the holder name and optional national ID shown on scans and management screens."""
+        body: dict = {"holder_name": holder_name}
+        if set_national_id:
+            body["national_id"] = national_id
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.patch(
-                f"{self._base}/fingerprints/{chip_id}/name", json={"holder_name": holder_name}
+                f"{self._base}/fingerprints/{chip_id}/name", json=body
             )
+        if resp.status_code == 409:
+            raise ValueError("national_id_taken")
         resp.raise_for_status()
 
     async def list_users(self) -> list[LedgerUser]:
@@ -72,6 +107,7 @@ class FingerprintsClient:
                 chip_id=str(row["id"]),
                 uid=row["uid"],
                 holder_name=row.get("holder_name"),
+                national_id=row.get("national_id"),
                 is_enabled=bool(row["is_enabled"]),
                 balance_cents=int(row.get("balance_cents") or 0),
                 created_at=row.get("created_at"),
@@ -84,23 +120,29 @@ class FingerprintsClient:
         chip_id: str,
         *,
         holder_name: str | None = None,
+        national_id: str | None = None,
         is_enabled: bool | None = None,
         set_holder_name: bool = False,
+        set_national_id: bool = False,
         set_is_enabled: bool = False,
     ) -> LedgerUser:
-        """Update holder name and/or enabled flag.
+        """Update holder name, national ID, and/or enabled flag.
 
-        Use set_holder_name / set_is_enabled so clearing a name (null) is distinct from omit.
+        Use set_* flags so clearing a field (null) is distinct from omit.
         """
         body: dict = {}
         if set_holder_name:
             body["holder_name"] = holder_name
+        if set_national_id:
+            body["national_id"] = national_id
         if set_is_enabled:
             body["is_enabled"] = is_enabled
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.patch(f"{self._base}/fingerprints/{chip_id}", json=body)
         if resp.status_code == 404:
             raise ValueError("chip_not_found")
+        if resp.status_code == 409:
+            raise ValueError("national_id_taken")
         if resp.status_code == 400:
             raise ValueError("no_fields")
         resp.raise_for_status()
@@ -109,6 +151,7 @@ class FingerprintsClient:
             chip_id=str(row["id"]),
             uid=row["uid"],
             holder_name=row.get("holder_name"),
+            national_id=row.get("national_id"),
             is_enabled=bool(row["is_enabled"]),
             balance_cents=int(row.get("balance_cents") or 0),
             created_at=row.get("created_at"),
@@ -123,20 +166,24 @@ class FingerprintsClient:
         resp.raise_for_status()
 
     async def get_by_id(self, chip_id: str) -> LedgerUser | None:
-        """Fetch a single chip by id; None if missing."""
+        """Fetch a single chip by id with balance; None if missing."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{self._base}/fingerprints/{chip_id}")
-        if resp.status_code == 404:
-            return None
-        resp.raise_for_status()
-        row = resp.json()
-        # Balance is not on ChipResponse; list/update include it. Fall back via validate.
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            row = resp.json()
+            bal_resp = await client.get(f"{self._base}/fingerprints/{chip_id}/balance")
+            balance_cents = 0
+            if bal_resp.status_code == 200:
+                balance_cents = int(bal_resp.json().get("amount_cents") or 0)
         return LedgerUser(
             chip_id=str(row["id"]),
             uid=row["uid"],
             holder_name=row.get("holder_name"),
+            national_id=row.get("national_id"),
             is_enabled=bool(row["is_enabled"]),
-            balance_cents=0,
+            balance_cents=balance_cents,
             created_at=row.get("created_at"),
         )
 
@@ -155,6 +202,13 @@ class FingerprintsClient:
             assigned_user_id=data.get("assigned_user_id"),
             balance_cents=int(data["balance_cents"]),
             holder_name=data.get("holder_name"),
+            national_id=data.get("national_id"),
+            subscription_active=bool(data.get("subscription_active")),
+            subscription_month_name=data.get("subscription_month_name"),
+            subscription_free_entry_available_today=bool(
+                data.get("subscription_free_entry_available_today")
+            ),
+            current_hebrew_month_name=data.get("current_hebrew_month_name"),
         )
 
     async def adjust_balance(
@@ -178,6 +232,18 @@ class FingerprintsClient:
             raise ValueError("insufficient_balance")
         resp.raise_for_status()
         return int(resp.json()["amount_cents"])
+
+    async def mark_subscription_free_entry(self, chip_id: str) -> None:
+        """Record today's free subscription entrance for the chip."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                f"{self._base}/fingerprints/{chip_id}/subscriptions/mark-free-entry"
+            )
+        if resp.status_code == 409:
+            raise ValueError("subscription_inactive")
+        if resp.status_code == 404:
+            raise ValueError("chip_not_found")
+        resp.raise_for_status()
 
 
 class HardwareClient:

@@ -33,6 +33,7 @@
   color: var(--text-h);
   letter-spacing: -0.02em;
   line-height: 1.2;
+  margin-right: 45%;
 }
 
 .subtitle {
@@ -40,6 +41,7 @@
   font-size: var(--text-fluid-sm);
   color: var(--text);
   line-height: 1.4;
+  margin-right: 45%;
 }
 
 .liveStatus {

@@ -4,18 +4,13 @@ import { StatusCard, statusCardStyles } from '../../../components/StatusCard'
 import styles from './FingerprintEnrollPage.module.css'
 import { useFingerprintEnrollPage } from './useFingerprintEnrollPage'
 
-/** PIN-protected screen that enrolls a fingerprint and opens a named balance. */
+/** Desk screen that enrolls a fingerprint and opens a named balance. */
 export function FingerprintEnrollPage() {
   const {
-    authenticated,
-    pin,
-    setPin,
-    pinError,
-    pinLoading,
-    onPinSubmit,
-    logout,
     holderName,
     setHolderName,
+    nationalId,
+    setNationalId,
     initialAmountShekels,
     setInitialAmountShekels,
     enroll,
@@ -33,44 +28,12 @@ export function FingerprintEnrollPage() {
 
   usePageMeta({
     title: 'רישום טביעת אצבע',
-    subtitle: authenticated ? 'רישום נכנס חדש וטעינת יתרה' : 'הזן קוד סודי לכניסה',
+    subtitle: 'רישום נכנס חדש וטעינת יתרה',
   })
-
-  if (!authenticated) {
-    return (
-      <PageShell variant="centered">
-        <StatusCard className={styles.card}>
-          <form onSubmit={onPinSubmit}>
-            <label className={styles.formField}>
-              קוד סודי
-              <input
-                type="password"
-                inputMode="numeric"
-                autoComplete="off"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                className={`${styles.input} ${styles.inputPin}`}
-              />
-            </label>
-            {pinError && <p className={styles.error}>{pinError}</p>}
-            <button type="submit" className={styles.submitButton} disabled={pinLoading || !pin}>
-              {pinLoading ? 'בודק…' : 'כניסה'}
-            </button>
-          </form>
-        </StatusCard>
-      </PageShell>
-    )
-  }
 
   return (
     <PageShell variant="centered">
       <div className={styles.card}>
-        <div className={styles.toolbar}>
-          <button type="button" className={styles.logoutButton} onClick={logout}>
-            יציאה
-          </button>
-        </div>
-
         <StatusCard>
           {enroll.step === 'idle' && (
             <>
@@ -86,6 +49,17 @@ export function FingerprintEnrollPage() {
                     onChange={(e) => setHolderName(e.target.value)}
                     className={styles.input}
                     placeholder="ישראל ישראלי"
+                  />
+                </label>
+                <label className={styles.formField}>
+                  תעודת זהות
+                  <input
+                    value={nationalId}
+                    onChange={(e) => setNationalId(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                    inputMode="numeric"
+                    className={styles.input}
+                    placeholder="123456782"
+                    autoComplete="off"
                   />
                 </label>
                 <label className={styles.formField}>
@@ -134,6 +108,12 @@ export function FingerprintEnrollPage() {
                   <span>שם</span>
                   <b>{enroll.holderName}</b>
                 </div>
+                {enroll.nationalId && (
+                  <div className={styles.summaryRow}>
+                    <span>תעודת זהות</span>
+                    <b>{enroll.nationalId}</b>
+                  </div>
+                )}
                 {enroll.slot != null && (
                   <div className={styles.summaryRow}>
                     <span>מזהה טביעה</span>

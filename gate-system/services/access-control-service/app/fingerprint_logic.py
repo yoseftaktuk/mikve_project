@@ -64,6 +64,7 @@ class PendingEnrollment:
 
     session_id: str
     holder_name: str
+    national_id: str
     initial_amount_cents: int
     created_at: float
 
@@ -187,12 +188,15 @@ class PendingEnrollmentStore:
         self._ttl_seconds = ttl_seconds
         self._sessions: dict[str, PendingEnrollment] = {}
 
-    def create(self, *, holder_name: str, initial_amount_cents: int = 0) -> PendingEnrollment:
+    def create(
+        self, *, holder_name: str, national_id: str, initial_amount_cents: int = 0
+    ) -> PendingEnrollment:
         """Register a new enrollment session and return it."""
         self._purge_expired()
         session = PendingEnrollment(
             session_id=secrets.token_urlsafe(9),
             holder_name=holder_name,
+            national_id=national_id,
             initial_amount_cents=max(0, initial_amount_cents),
             created_at=time.monotonic(),
         )
@@ -349,10 +353,11 @@ async def process_fingerprint_scan(
 
     if identify_mode:
         logger.info(
-            "fingerprint_identified slot=%s uid=%s balance_cents=%s",
+            "fingerprint_identified slot=%s uid=%s balance_cents=%s subscription_active=%s",
             slot,
             chip.uid,
             chip.balance_cents,
+            chip.subscription_active,
         )
         await publish(
             {
@@ -362,12 +367,21 @@ async def process_fingerprint_scan(
                 "chip_id": chip.chip_id,
                 "holder_name": chip.holder_name,
                 "balance_cents": chip.balance_cents,
+                "subscription_active": chip.subscription_active,
+                "subscription_month_name": chip.subscription_month_name,
+                "subscription_free_entry_available_today": chip.subscription_free_entry_available_today,
+                "current_hebrew_month_name": chip.current_hebrew_month_name,
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
         )
         return None
 
-    if chip.balance_cents < fee:
+    use_subscription = (
+        chip.subscription_active and chip.subscription_free_entry_available_today
+    )
+    charge_fee = 0 if use_subscription else fee
+
+    if not use_subscription and chip.balance_cents < fee:
         # Offer top-up choices on the kiosk instead of a dead-end denial toast.
         db.add(
             AccessLog(
@@ -407,7 +421,7 @@ async def process_fingerprint_scan(
         chip_id=chip.chip_id,
         holder_name=chip.holder_name,
         balance_cents=chip.balance_cents,
-        fee_cents=fee,
+        fee_cents=charge_fee,
     )
     logger.info(
         "fingerprint_pending slot=%s uid=%s confidence=%s approval_id=%s",
@@ -426,6 +440,7 @@ async def process_fingerprint_scan(
             "holder_name": approval.holder_name,
             "balance_cents": approval.balance_cents,
             "fee_cents": approval.fee_cents,
+            "payment_method": "subscription" if charge_fee == 0 else "balance",
             "expires_in_seconds": approval.expires_in_seconds,
             "ts": datetime.now(timezone.utc).isoformat(),
         }
@@ -501,16 +516,44 @@ async def complete_enrollment(
 
     uid = slot_to_uid(slot)
     try:
-        chip = await chip_client.validate(uid)
-        # Slot reused by the sensor: keep the existing chip and its balance, update the name.
-        await chip_client.rename(chip.chip_id, session.holder_name)
-        chip_id = chip.chip_id
-        balance_cents = chip.balance_cents
-    except ValueError:
-        await chip_client.register(uid, holder_name=session.holder_name)
-        chip = await chip_client.validate(uid)
-        chip_id = chip.chip_id
-        balance_cents = chip.balance_cents
+        try:
+            chip = await chip_client.validate(uid)
+            # Slot reused by the sensor: keep the existing chip and its balance, update identity.
+            await chip_client.rename(
+                chip.chip_id,
+                session.holder_name,
+                national_id=session.national_id,
+                set_national_id=True,
+            )
+            chip_id = chip.chip_id
+            balance_cents = chip.balance_cents
+        except ValueError as exc:
+            if str(exc) == "national_id_taken":
+                raise
+            await chip_client.register(
+                uid, holder_name=session.holder_name, national_id=session.national_id
+            )
+            chip = await chip_client.validate(uid)
+            chip_id = chip.chip_id
+            balance_cents = chip.balance_cents
+    except ValueError as exc:
+        if str(exc) == "national_id_taken":
+            logger.warning(
+                "fingerprint_enroll_national_id_taken session_id=%s national_id=%s",
+                session_id,
+                session.national_id,
+            )
+            await publish(
+                {
+                    "type": "fingerprint.enroll_progress",
+                    "session_id": session_id,
+                    "step": "failed",
+                    "reason": "national_id_taken",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            return
+        raise
 
     if session.initial_amount_cents > 0:
         balance_cents = await chip_client.adjust_balance(
@@ -521,10 +564,11 @@ async def complete_enrollment(
         )
 
     logger.info(
-        "fingerprint_registered uid=%s slot=%s holder_name=%s balance_cents=%s",
+        "fingerprint_registered uid=%s slot=%s holder_name=%s national_id=%s balance_cents=%s",
         uid,
         slot,
         session.holder_name,
+        session.national_id,
         balance_cents,
     )
     await publish(
@@ -535,6 +579,7 @@ async def complete_enrollment(
             "uid": uid,
             "chip_id": chip_id,
             "holder_name": session.holder_name,
+            "national_id": session.national_id,
             "balance_cents": balance_cents,
             "ts": datetime.now(timezone.utc).isoformat(),
         }

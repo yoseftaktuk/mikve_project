@@ -34,7 +34,19 @@ class Settings(CommonSettings):
     # Local unit tests call process_nedarim_callback directly and skip this gate.
     nedarim_require_cloudflare: bool = Field(default=True, alias="NEDARIM_REQUIRE_CLOUDFLARE")
 
+    # Exact Nedarim Groupe that activates a Hebrew-month subscription.
+    # Comparison is not stripped.
+    nedarim_target_group: str = Field(default="מנוי מקווה חודש", alias="NEDARIM_TARGET_GROUP")
+
+    # Exact Nedarim Groupe that credits ledger balance. Comparison is not stripped.
+    nedarim_balance_group: str = Field(default="ערך צבור למקווה", alias="NEDARIM_BALANCE_GROUP")
+
+    # Skip IP + Cloudflare checks on POST /nedarim/webhook only. Ignored when
+    # ENVIRONMENT=production so a mis-set flag cannot open the production path.
+    nedarim_webhook_allow_local: bool = Field(default=False, alias="NEDARIM_WEBHOOK_ALLOW_LOCAL")
+
     topup_amounts_cents: str = Field(default="2000,5000,10000", alias="TOPUP_AMOUNTS_CENTS")
+    subscription_price_cents: int = Field(default=30000, alias="SUBSCRIPTION_PRICE_CENTS")
 
     @property
     def topup_amount_options_cents(self) -> tuple[int, ...]:

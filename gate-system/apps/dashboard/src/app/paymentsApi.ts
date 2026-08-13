@@ -2,6 +2,7 @@ import axios from 'axios'
 import { API_BASE } from './config'
 import type {
   CardTopupCreateResponse,
+  CardTopupProduct,
   CardTopupSimulatePayResponse,
   CardTopupStatusResponse,
   PaymentHealthResponse,
@@ -13,10 +14,11 @@ export const paymentsApi = axios.create({
   timeout: 30_000,
 })
 
-/** Open a server-side Nedarim transaction for a chip top-up. */
+/** Open a server-side Nedarim transaction for a chip top-up or subscription. */
 export async function createCardTopup(body: {
-  chip_uid: string
+  fingerprint_uid: string
   amount_cents: number
+  product?: CardTopupProduct
 }): Promise<CardTopupCreateResponse> {
   const res = await paymentsApi.post<CardTopupCreateResponse>('/payments/card-topups', body)
   return res.data

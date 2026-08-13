@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../app/api'
-import { managementApi } from '../app/managementApi'
 import { formatMoney } from '../app/money'
-import { useManagementAuth } from './useManagementAuth'
+import { getPaymentHealth } from '../app/paymentsApi'
 import type {
   FingerprintIdentifiedEvent,
   FingerprintIdentifyFailedEvent,
@@ -16,14 +15,16 @@ const IDENTIFY_FAIL_MESSAGES: Record<string, string> = {
   chip_disabled: 'הכרטיס של משתמש זה מושבת.',
 }
 
-/** PIN-protected desk flow: identify by fingerprint, then card top-up. */
+/** Desk flow: identify by fingerprint, then card top-up or subscription purchase. */
 export function useMoneyTopupPage() {
-  const { authenticated, pin, setPin, pinError, pinLoading, onPinSubmit, logout } = useManagementAuth()
-
   const [phase, setPhase] = useState<MoneyTopupPhase>('waiting')
   const [user, setUser] = useState<IdentifiedUser | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showCardDialog, setShowCardDialog] = useState(false)
+  const [cardDialogProduct, setCardDialogProduct] = useState<'balance' | 'monthly_subscription'>('balance')
+  const [hebrewMonthName, setHebrewMonthName] = useState<string | null>(null)
+  const [subscriptionPriceCents, setSubscriptionPriceCents] = useState(30000)
+  const [lastTopupSuccess, setLastTopupSuccess] = useState<string | null>(null)
   const [identifyReady, setIdentifyReady] = useState(false)
   const [simSlot, setSimSlot] = useState('1')
   const [simLoading, setSimLoading] = useState(false)
@@ -36,7 +37,7 @@ export function useMoneyTopupPage() {
 
   const startIdentify = useCallback(async () => {
     try {
-      await managementApi.post('/access/management/fingerprint/identify/start')
+      await api.post('/access/management/fingerprint/identify/start')
       setIdentifyReady(true)
       setError(null)
     } catch {
@@ -45,23 +46,34 @@ export function useMoneyTopupPage() {
     }
   }, [])
 
-  const cancelIdentify = useCallback(async () => {
-    try {
-      await managementApi.post('/access/management/fingerprint/identify/cancel')
-    } catch {
-      // Best-effort; entrance mode resumes when the session TTL expires.
-    } finally {
-      setIdentifyReady(false)
+  useEffect(() => {
+    let cancelled = false
+    getPaymentHealth()
+      .then((health) => {
+        if (cancelled) return
+        if (health.current_hebrew_month_name) {
+          setHebrewMonthName(health.current_hebrew_month_name)
+        }
+        if (
+          typeof health.subscription_price_cents === 'number' &&
+          health.subscription_price_cents > 0
+        ) {
+          setSubscriptionPriceCents(health.subscription_price_cents)
+        }
+      })
+      .catch(() => {
+        // Month label falls back to the identify payload.
+      })
+    return () => {
+      cancelled = true
     }
   }, [])
 
   useEffect(() => {
-    if (!authenticated) return
-
     let cancelled = false
     const activate = async () => {
       try {
-        await managementApi.post('/access/management/fingerprint/identify/start')
+        await api.post('/access/management/fingerprint/identify/start')
         if (cancelled) return
         setIdentifyReady(true)
         setError(null)
@@ -80,13 +92,11 @@ export function useMoneyTopupPage() {
     return () => {
       cancelled = true
       window.clearInterval(refresh)
-      void managementApi.post('/access/management/fingerprint/identify/cancel').catch(() => {})
+      void api.post('/access/management/fingerprint/identify/cancel').catch(() => {})
     }
-  }, [authenticated])
+  }, [])
 
   useEffect(() => {
-    if (!authenticated) return
-
     const ws = new WebSocket(wsUrl)
     ws.onmessage = (msg) => {
       let event: { type?: string }
@@ -104,10 +114,17 @@ export function useMoneyTopupPage() {
           holderName: identified.holder_name ?? null,
           balanceCents: identified.balance_cents,
           slot: identified.slot ?? null,
+          subscriptionActive: Boolean(identified.subscription_active),
+          subscriptionMonthName: identified.subscription_month_name ?? null,
+          currentHebrewMonthName: identified.current_hebrew_month_name ?? null,
         })
+        if (identified.current_hebrew_month_name) {
+          setHebrewMonthName(identified.current_hebrew_month_name)
+        }
         setPhase('identified')
         setError(null)
         setSimError(null)
+        setLastTopupSuccess(null)
         setShowCardDialog(false)
         return
       }
@@ -118,27 +135,42 @@ export function useMoneyTopupPage() {
         setPhase('failed')
         setUser(null)
         setShowCardDialog(false)
+        setLastTopupSuccess(null)
         setError(IDENTIFY_FAIL_MESSAGES[reason] ?? 'הזיהוי נכשל. נסו שוב.')
       }
     }
     return () => ws.close()
-  }, [authenticated, wsUrl])
+  }, [wsUrl])
 
   const refreshBalance = useCallback(async (uid: string) => {
     try {
-      const res = await managementApi.get<{
+      const res = await api.get<{
         uid: string
         balance_cents: number
         holder_name?: string | null
         chip_id?: string
+        subscription_active?: boolean
+        subscription_month_name?: string | null
+        current_hebrew_month_name?: string | null
       }>(`/access/management/chip/${encodeURIComponent(uid)}`)
+      const data = res.data
+      if (data.current_hebrew_month_name) {
+        setHebrewMonthName(data.current_hebrew_month_name)
+      }
       setUser((current) =>
         current && current.uid === uid
           ? {
               ...current,
-              balanceCents: res.data.balance_cents,
-              holderName: res.data.holder_name ?? current.holderName,
-              chipId: res.data.chip_id ?? current.chipId,
+              balanceCents: data.balance_cents,
+              holderName: data.holder_name ?? current.holderName,
+              chipId: data.chip_id ?? current.chipId,
+              subscriptionActive:
+                typeof data.subscription_active === 'boolean'
+                  ? data.subscription_active
+                  : current.subscriptionActive,
+              subscriptionMonthName: data.subscription_month_name ?? current.subscriptionMonthName,
+              currentHebrewMonthName:
+                data.current_hebrew_month_name ?? current.currentHebrewMonthName,
             }
           : current,
       )
@@ -149,6 +181,15 @@ export function useMoneyTopupPage() {
 
   const openCardTopup = useCallback(() => {
     if (!user) return
+    setLastTopupSuccess(null)
+    setCardDialogProduct('balance')
+    setShowCardDialog(true)
+  }, [user])
+
+  const openSubscriptionPurchase = useCallback(() => {
+    if (!user || user.subscriptionActive) return
+    setLastTopupSuccess(null)
+    setCardDialogProduct('monthly_subscription')
     setShowCardDialog(true)
   }, [user])
 
@@ -158,7 +199,23 @@ export function useMoneyTopupPage() {
 
   const onPaid = useCallback(
     (balanceAfterCents: number) => {
-      setShowCardDialog(false)
+      if (cardDialogProduct === 'monthly_subscription') {
+        const month = hebrewMonthName || user?.currentHebrewMonthName || 'החודש הנוכחי'
+        setLastTopupSuccess(`מנוי חודשי לחודש ${month} הופעל בהצלחה`)
+        setUser((current) =>
+          current
+            ? {
+                ...current,
+                subscriptionActive: true,
+                subscriptionMonthName: month,
+                currentHebrewMonthName: month,
+              }
+            : current,
+        )
+        if (user) void refreshBalance(user.uid)
+        return
+      }
+      setLastTopupSuccess(`היתרה עודכנה בהצלחה — ${formatMoney(balanceAfterCents)}`)
       setUser((current) => {
         if (!current) return current
         const next = { ...current, balanceCents: balanceAfterCents }
@@ -166,7 +223,7 @@ export function useMoneyTopupPage() {
         return next
       })
     },
-    [refreshBalance],
+    [cardDialogProduct, hebrewMonthName, refreshBalance, user],
   )
 
   const scanAnother = useCallback(() => {
@@ -174,6 +231,7 @@ export function useMoneyTopupPage() {
     setUser(null)
     setError(null)
     setSimError(null)
+    setLastTopupSuccess(null)
     setShowCardDialog(false)
     void startIdentify()
   }, [startIdentify])
@@ -203,30 +261,18 @@ export function useMoneyTopupPage() {
     void simulateFingerprint(null)
   }, [simulateFingerprint])
 
-  const handleLogout = useCallback(() => {
-    void cancelIdentify()
-    setPhase('waiting')
-    setUser(null)
-    setError(null)
-    setSimError(null)
-    setShowCardDialog(false)
-    logout()
-  }, [cancelIdentify, logout])
-
   return {
-    authenticated,
-    pin,
-    setPin,
-    pinError,
-    pinLoading,
-    onPinSubmit,
-    logout: handleLogout,
     phase,
     user,
     error,
+    lastTopupSuccess,
     identifyReady,
     showCardDialog,
+    cardDialogProduct,
+    hebrewMonthName,
+    subscriptionPriceCents,
     openCardTopup,
+    openSubscriptionPurchase,
     closeCardTopup,
     onPaid,
     scanAnother,

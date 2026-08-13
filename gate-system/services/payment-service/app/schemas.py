@@ -12,8 +12,9 @@ class ChargeChipResponse(BaseModel):
 
 
 class CardTopupCreateRequest(BaseModel):
-    chip_uid: str = Field(min_length=4, max_length=64)
+    fingerprint_uid: str = Field(min_length=4, max_length=64)
     amount_cents: int = Field(gt=0, le=1_000_000)
+    product: str = Field(default="balance", max_length=32)
 
 
 class CardTopupCreateResponse(BaseModel):
@@ -21,16 +22,18 @@ class CardTopupCreateResponse(BaseModel):
     nedarim_transaction_id: str
     iframe_url: str
     amount_cents: int
-    chip_uid: str
+    fingerprint_uid: str
     chip_id: uuid.UUID
+    product: str = "balance"
 
 
 class CardTopupStatusResponse(BaseModel):
     topup_id: uuid.UUID
     status: str
     amount_cents: int
-    chip_uid: str
+    fingerprint_uid: str
     chip_id: uuid.UUID
+    product: str = "balance"
     nedarim_transaction_id: str | None = None
     balance_after_cents: int | None = None
     last_num: str | None = None

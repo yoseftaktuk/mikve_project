@@ -1,17 +1,17 @@
-import styles from './ChipToast.module.css'
-import type { ChipToastData } from './types'
-import { useChipToast } from './useChipToast'
+import styles from './AccessToast.module.css'
+import type { AccessToastData } from './types'
+import { useAccessToast } from './useAccessToast'
 
-export type { ChipToastData } from './types'
+export type { AccessToastData } from './types'
 
-type ChipToastProps = {
-  toast: ChipToastData
+type AccessToastProps = {
+  toast: AccessToastData
   formatMoney: (cents: number) => string
   onDismiss: () => void
 }
 
-export function ChipToast({ toast, formatMoney, onDismiss }: ChipToastProps) {
-  const { isGranted, overlayClassName, toastClassName, icon, defaultBalanceLabel } = useChipToast({ toast })
+export function AccessToast({ toast, formatMoney, onDismiss }: AccessToastProps) {
+  const { isGranted, overlayClassName, toastClassName, icon, defaultBalanceLabel } = useAccessToast({ toast })
 
   return (
     <div className={overlayClassName} onClick={isGranted ? undefined : onDismiss}>

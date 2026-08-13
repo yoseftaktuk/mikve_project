@@ -174,7 +174,7 @@ Design surfaces for later implementation:
 
 ```http
 GET /management/access-attempts?status=MANUAL_REVIEW
-Authorization: Bearer <management JWT>
+Cookie: gate_management_token=<opaque management session token>
 ```
 
 ### Resolve manual review

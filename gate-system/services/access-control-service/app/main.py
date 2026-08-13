@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 import redis.asyncio as redis
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,12 +42,15 @@ from .management import (
     ChipTopupResponse,
     ManagementAuthResponse,
     ManagementPinRequest,
+    ManagementSessionResponse,
     ManagementUserResponse,
     ManagementUserUpdateRequest,
     authenticate_pin,
     delete_user as management_delete_user,
     get_chip_info,
+    get_management_session,
     list_users as management_list_users,
+    logout_management,
     open_door as management_open_door,
     require_management_token,
     topup_chip,
@@ -224,19 +227,30 @@ async def dev_simulate_cash(req: SimulateCashRequest, db: AsyncSession = Depends
 
 
 @app.post("/management/auth", response_model=ManagementAuthResponse, include_in_schema=False)
-async def management_auth(req: ManagementPinRequest):
-    """Authenticate the management PIN and return a session token."""
-    return await authenticate_pin(req)
+async def management_auth(req: ManagementPinRequest, response: Response):
+    """Authenticate the management PIN and set an HttpOnly session cookie."""
+    return await authenticate_pin(req, response)
+
+
+@app.get("/management/session", response_model=ManagementSessionResponse, include_in_schema=False)
+async def management_session(request: Request):
+    """Return whether the current request has a valid management session."""
+    return get_management_session(request)
+
+
+@app.post("/management/logout", response_model=ManagementSessionResponse, include_in_schema=False)
+async def management_logout(request: Request, response: Response):
+    """Revoke the management session and clear the HttpOnly cookie."""
+    return await logout_management(request, response)
 
 
 @app.get(
     "/management/chip/{uid}",
     response_model=ChipInfoResponse,
-    dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
 async def management_chip_info(uid: str):
-    """Return chip balance and status for management UI."""
+    """Return chip balance and status for desk top-up / management UI."""
     return await get_chip_info(uid, chip_client)
 
 
@@ -341,13 +355,24 @@ async def management_door_open():
 @app.post(
     "/management/fingerprint/enroll",
     response_model=FingerprintEnrollStartResponse,
-    dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
 async def management_fingerprint_enroll(req: FingerprintEnrollRequest):
     """Start enrolling a finger for a named holder with an optional initial balance."""
+    from gate_shared.national_id import InvalidNationalIdError, normalize_national_id
+
+    try:
+        national_id = normalize_national_id(req.national_id)
+    except InvalidNationalIdError:
+        raise AppError(
+            code="invalid_national_id",
+            message="Invalid Israeli national ID",
+            http_status=status.HTTP_400_BAD_REQUEST,
+        ) from None
+
     session = enrollments.create(
         holder_name=req.holder_name.strip(),
+        national_id=national_id,
         initial_amount_cents=req.initial_amount_cents,
     )
     try:
@@ -363,6 +388,7 @@ async def management_fingerprint_enroll(req: FingerprintEnrollRequest):
     return FingerprintEnrollStartResponse(
         session_id=session.session_id,
         holder_name=session.holder_name,
+        national_id=session.national_id,
         initial_amount_cents=session.initial_amount_cents,
     )
 
@@ -370,7 +396,6 @@ async def management_fingerprint_enroll(req: FingerprintEnrollRequest):
 @app.post(
     "/management/fingerprint/enroll/cancel",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
 async def management_fingerprint_enroll_cancel(req: FingerprintEnrollCancelRequest):
@@ -383,7 +408,6 @@ async def management_fingerprint_enroll_cancel(req: FingerprintEnrollCancelReque
 @app.post(
     "/management/fingerprint/identify/start",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
 async def management_fingerprint_identify_start():
@@ -395,7 +419,6 @@ async def management_fingerprint_identify_start():
 @app.post(
     "/management/fingerprint/identify/cancel",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
 async def management_fingerprint_identify_cancel():

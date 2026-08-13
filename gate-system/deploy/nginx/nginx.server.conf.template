@@ -45,6 +45,8 @@ http {
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $scheme;
+      # Cloudflare Tunnel sets this to the real client (Nedarim CallBack / webhook source).
+      proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     # Hardware runs on the Raspberry Pi edge host (EDGE_HARDWARE_HOST).

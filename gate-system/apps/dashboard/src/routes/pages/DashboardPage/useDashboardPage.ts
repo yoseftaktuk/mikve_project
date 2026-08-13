@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../../app/api'
 import { formatMoney } from '../../../app/money'
-import type { ChipToastData } from '../../../components/ChipToast/types'
+import type { AccessToastData } from '../../../components/AccessToast/types'
 import type { GateStatus } from '../../../components/GateEntrancePanel'
 import type { PendingApproval } from '../../../types/fingerprint'
 import type { TopupOffer } from '../../../types/topup'
@@ -40,7 +40,7 @@ function grantedToast(event: {
   remaining_cents?: number
   method?: string
   holder_name?: string | null
-}): ChipToastData {
+}): AccessToastData {
   const isCash = event.method === 'cash'
   const changeCents = event.remaining_cents ?? 0
   const name = event.holder_name?.trim()
@@ -53,7 +53,7 @@ function grantedToast(event: {
         ? changeCents
         : null
       : (event.balance_after_cents ?? null),
-    balanceLabel: isCash ? 'עודף' : "יתרה נותרת בצ'יפ",
+    balanceLabel: isCash ? 'עודף' : 'יתרה נותרת',
   }
 }
 
@@ -64,7 +64,7 @@ function isCashGrantedEvent(event: WsEvent): boolean {
   )
 }
 
-function fingerprintDeniedToast(event: WsEvent): ChipToastData {
+function fingerprintDeniedToast(event: WsEvent): AccessToastData {
   const name = event.holder_name?.trim()
   if (event.reason === 'insufficient_balance') {
     return {
@@ -93,7 +93,7 @@ function fingerprintDeniedToast(event: WsEvent): ChipToastData {
   }
 }
 
-function chipToastFromEvent(event: WsEvent): ChipToastData | null {
+function accessToastFromEvent(event: WsEvent): AccessToastData | null {
   if (isCashGrantedEvent(event)) {
     return grantedToast({ method: 'cash', remaining_cents: event.remaining_cents })
   }
@@ -115,24 +115,24 @@ function chipToastFromEvent(event: WsEvent): ChipToastData | null {
         title: 'אין מספיק יתרה',
         message:
           fee != null
-            ? `נדרשים ${formatMoney(fee)} לכניסה. אנא טען את הצ'יפ או שלם במזומן.`
-            : "אין מספיק יתרה בצ'יפ. אנא טען או שלם במזומן.",
+            ? `נדרשים ${formatMoney(fee)} לכניסה. אנא טען יתרה או שלם במזומן.`
+            : 'אין מספיק יתרה. אנא טען יתרה או שלם במזומן.',
         balanceCents: balance,
       }
     }
     if (event.reason === 'chip_disabled') {
       return {
         kind: 'denied',
-        title: "צ'יפ חסום",
-        message: "הצ'יפ הזה אינו פעיל. פנה למנהל המערכת.",
+        title: 'המשתמש חסום',
+        message: 'הכניסה עבור טביעת האצבע הזו אינה פעילה. פנה למנהל המערכת.',
         balanceCents: balance,
       }
     }
     if (event.reason === 'unknown_chip') {
       return {
         kind: 'denied',
-        title: "צ'יפ לא מזוהה",
-        message: "הצ'יפ לא רשום במערכת.",
+        title: 'טביעת אצבע לא מזוהה',
+        message: 'טביעת האצבע לא רשומה במערכת. פנה לדלפק לרישום.',
         balanceCents: null,
       }
     }
@@ -144,7 +144,7 @@ function chipToastFromEvent(event: WsEvent): ChipToastData | null {
 /** Tracks live gate status, WebSocket events, and cash/fingerprint simulation for the entrance screen. */
 export function useDashboardPage() {
   const [gateStatus, setGateStatus] = useState<GateStatus | null>(null)
-  const [chipToast, setChipToast] = useState<ChipToastData | null>(null)
+  const [accessToast, setAccessToast] = useState<AccessToastData | null>(null)
   const [lastActivity, setLastActivity] = useState<string | null>(null)
   const [simError, setSimError] = useState<string | null>(null)
   const [simLoading, setSimLoading] = useState(false)
@@ -169,15 +169,15 @@ export function useDashboardPage() {
     api.get<GateStatus>('/access/healthz').then((r) => setGateStatus(r.data)).catch(() => {})
   }, [])
 
-  const showChipToast = useCallback((toast: ChipToastData) => {
+  const showAccessToast = useCallback((toast: AccessToastData) => {
     if (toastTimer.current != null) window.clearTimeout(toastTimer.current)
-    setChipToast(toast)
+    setAccessToast(toast)
     if (toast.kind === 'granted') {
-      toastTimer.current = window.setTimeout(() => setChipToast(null), 4000)
+      toastTimer.current = window.setTimeout(() => setAccessToast(null), 4000)
     }
   }, [])
 
-  const dismissChipToast = useCallback(() => setChipToast(null), [])
+  const dismissAccessToast = useCallback(() => setAccessToast(null), [])
 
   const simulateFingerprint = useCallback(async (slot: number | null) => {
     setSimLoading(true)
@@ -212,7 +212,7 @@ export function useDashboardPage() {
         const res = await api.post<SimulateCashResult>('/access/dev/simulate/cash', { amount_cents: amountCents })
         refreshStatus()
         if (res.data.granted) {
-          showChipToast(
+          showAccessToast(
             grantedToast({
               method: 'cash',
               remaining_cents: res.data.remaining_cents,
@@ -230,7 +230,7 @@ export function useDashboardPage() {
         setSimLoading(false)
       }
     },
-    [refreshStatus, showChipToast],
+    [refreshStatus, showAccessToast],
   )
 
   const approvePending = useCallback(async () => {
@@ -319,7 +319,7 @@ export function useDashboardPage() {
 
       if (event.type === 'access.topup_needed' && event.uid && event.chip_id) {
         setPendingApproval(null)
-        setChipToast(null)
+        setAccessToast(null)
         setCardTopupOpen(false)
         setTopupOffer({
           uid: event.uid,
@@ -346,9 +346,9 @@ export function useDashboardPage() {
         )
       }
 
-      const toast = chipToastFromEvent(event)
+      const toast = accessToastFromEvent(event)
       if (toast) {
-        showChipToast(toast)
+        showAccessToast(toast)
       }
 
       if (event.type === 'access.pending_cleared') {
@@ -372,11 +372,11 @@ export function useDashboardPage() {
       }
     }
     return () => ws.close()
-  }, [wsUrl, refreshStatus, showChipToast])
+  }, [wsUrl, refreshStatus, showAccessToast])
 
   return {
     gateStatus,
-    chipToast,
+    accessToast,
     lastActivity,
     simError,
     simLoading,
@@ -388,7 +388,7 @@ export function useDashboardPage() {
     approvalError,
     topupOffer,
     cardTopupOpen,
-    dismissChipToast,
+    dismissAccessToast,
     simulateSlotFromInput,
     simulateUnmatched,
     simulateCash,

@@ -4,7 +4,7 @@ export function LiveStatusBadge() {
   return (
     <span className={styles.badge}>
       <span className={styles.dot} aria-hidden />
-      המערכת פעילה ומאזינה
+      מערכת פעילה
     </span>
   )
 }

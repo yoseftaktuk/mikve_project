@@ -25,7 +25,7 @@ async def test_create_card_topup_mock_without_public_url(monkeypatch: pytest.Mon
     )
 
     created = await create_card_topup(
-        chip_uid=chip.uid,
+        fingerprint_uid=chip.uid,
         amount_cents=2000,
         db=db,  # type: ignore[arg-type]
         chip_client=CreateFakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]

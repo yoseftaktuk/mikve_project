@@ -3,9 +3,9 @@
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) minmax(0, auto) auto;
-  gap: clamp(0.3rem, 1.2dvh, 0.65rem);
-  padding: clamp(0.5rem, 1.5dvh, 1rem);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: clamp(0.4rem, 1.5dvh, 0.85rem);
+  padding: clamp(0.55rem, 1.8dvh, 1.1rem);
   border-radius: clamp(0.75rem, 1.5dvh, 1.1rem);
   border: 1px solid var(--accent-border);
   background: linear-gradient(160deg, var(--accent-bg) 0%, var(--code-bg) 55%);
@@ -18,41 +18,31 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(0.25rem, 0.8dvh, 0.45rem);
+  gap: clamp(0.15rem, 0.6dvh, 0.35rem);
   text-align: center;
   min-height: 0;
 }
 
 .pageTitle {
   margin: 0;
-  font-size: clamp(1.2rem, 3.2dvh, 1.75rem);
-  font-weight: 600;
+  font-size: clamp(1.45rem, 4dvh, 2rem);
+  font-weight: 700;
   color: var(--text-h);
   letter-spacing: -0.02em;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 
 .pageSubtitle {
   margin: 0;
-  font-size: clamp(0.95rem, 2.4dvh, 1.15rem);
+  font-size: clamp(1rem, 2.6dvh, 1.25rem);
   color: var(--text);
-  line-height: 1.4;
-  max-width: 28rem;
-}
-
-.lead {
-  margin: 0;
-  font-size: clamp(1rem, 2.6dvh, 1.2rem);
-  color: var(--text-h);
-  line-height: 1.4;
-  max-width: 28rem;
-  margin-inline: auto;
+  line-height: 1.3;
 }
 
 .methods {
   display: grid;
   grid-template-columns: 1fr;
-  gap: clamp(0.35rem, 1dvh, 0.55rem);
+  gap: clamp(0.55rem, 1.8dvh, 1rem);
   min-height: 0;
   align-content: stretch;
 }
@@ -63,89 +53,90 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: clamp(0.15rem, 0.6dvh, 0.3rem);
-  padding: clamp(0.35rem, 1.2dvh, 0.65rem) clamp(0.35rem, 1dvh, 0.5rem);
-  min-height: 0;
-  border-radius: 0.65rem;
-  border: 1px solid var(--border);
+  gap: clamp(0.25rem, 0.8dvh, 0.45rem);
+  padding: clamp(0.75rem, 2.2dvh, 1.25rem) clamp(0.6rem, 1.5dvh, 1rem);
+  min-height: clamp(5rem, 18dvh, 7.5rem);
+  border-radius: 0.85rem;
+  border: 2px solid var(--accent-border);
   background: var(--bg);
+  color: var(--accent);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.methodCard:active {
+  transform: scale(0.98);
+  background: var(--accent-bg);
+  border-color: var(--accent);
 }
 
 .methodIcon {
-  font-size: clamp(1.1rem, 3.5dvh, 1.65rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(2.4rem, 7dvh, 3.5rem);
   line-height: 1;
+  color: var(--accent);
+}
+
+.methodIcon svg {
+  display: block;
+  width: 1em;
+  height: 1em;
 }
 
 .methodTitle {
   margin: 0;
-  font-size: clamp(1.05rem, 2.8dvh, 1.3rem);
-  font-weight: 600;
+  font-size: clamp(1.25rem, 3.4dvh, 1.65rem);
+  font-weight: 700;
   color: var(--text-h);
-  line-height: 1.25;
+  line-height: 1.2;
 }
 
 .methodDesc {
   margin: 0;
-  font-size: clamp(0.95rem, 2.3dvh, 1.1rem);
+  font-size: clamp(0.95rem, 2.4dvh, 1.15rem);
   color: var(--text);
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  line-height: 1.3;
 }
 
 .metrics {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: clamp(0.3rem, 1dvh, 0.5rem);
+  align-items: center;
+  gap: clamp(0.4rem, 1.2dvh, 0.65rem);
 }
 
-.stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: clamp(0.3rem, 1dvh, 0.45rem);
-}
-
-.statBox {
+.feeBlock {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 0.1rem;
-  padding: clamp(0.3rem, 1dvh, 0.5rem);
-  border-radius: 0.6rem;
-  border: 1px solid var(--border);
-  background: var(--bg);
   text-align: center;
-  min-height: 0;
 }
 
-.statLabel {
-  font-size: clamp(0.7rem, 1.6dvh, 0.85rem);
+.feeLabel {
+  font-size: clamp(0.85rem, 2dvh, 1rem);
   color: var(--text);
   line-height: 1.2;
 }
 
-.statValue {
-  font-size: clamp(0.95rem, 2.5dvh, 1.25rem);
-  font-weight: 700;
+.feeValue {
+  font-size: clamp(1.6rem, 4.5dvh, 2.25rem);
+  font-weight: 800;
   color: var(--accent);
   letter-spacing: -0.02em;
-  line-height: 1.15;
-}
-
-.statUnit {
-  font-size: clamp(0.7rem, 1.6dvh, 0.85rem);
-  font-weight: 500;
-  color: var(--text);
+  line-height: 1.1;
 }
 
 .cashSection {
-  padding: clamp(0.35rem, 1dvh, 0.55rem);
-  border-radius: 0.6rem;
-  border: 1px solid var(--border);
+  width: 100%;
+  max-width: 28rem;
+  padding: clamp(0.4rem, 1.2dvh, 0.65rem) clamp(0.55rem, 1.4dvh, 0.85rem);
+  border-radius: 0.7rem;
   background: var(--bg);
   min-height: 0;
 }
@@ -154,27 +145,27 @@
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 0.35rem;
-  margin-bottom: 0.3rem;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
 }
 
 .cashTitle {
   margin: 0;
-  font-size: clamp(0.75rem, 1.8dvh, 0.9rem);
+  font-size: clamp(0.9rem, 2.1dvh, 1.05rem);
   font-weight: 600;
   color: var(--text-h);
   line-height: 1.2;
 }
 
 .cashAmount {
-  font-size: clamp(0.7rem, 1.6dvh, 0.85rem);
-  font-weight: 600;
+  font-size: clamp(0.95rem, 2.3dvh, 1.15rem);
+  font-weight: 700;
   color: var(--text-h);
   white-space: nowrap;
 }
 
 .cashProgressBar {
-  height: clamp(0.45rem, 1.2dvh, 0.65rem);
+  height: clamp(0.55rem, 1.4dvh, 0.75rem);
   border-radius: 999px;
   background: var(--border);
   overflow: hidden;
@@ -183,13 +174,13 @@
 .cashProgressFill {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), #7c3aed);
+  background: linear-gradient(90deg, var(--accent), var(--accent-border));
   transition: width 0.4s ease;
 }
 
 .cashHint {
-  margin: 0.25rem 0 0;
-  font-size: clamp(0.7rem, 1.5dvh, 0.82rem);
+  margin: 0.35rem 0 0;
+  font-size: clamp(0.85rem, 2dvh, 1rem);
   color: var(--text);
   text-align: center;
   line-height: 1.3;
@@ -198,20 +189,14 @@
 .activity {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: clamp(0.3rem, 0.9dvh, 0.45rem) clamp(0.45rem, 1.2dvh, 0.6rem);
-  border-radius: 0.55rem;
-  border: 1px solid var(--border);
-  background: var(--code-bg);
+  justify-content: center;
+  gap: 0.35rem;
+  padding: clamp(0.2rem, 0.6dvh, 0.35rem) 0.25rem;
   font-size: clamp(0.7rem, 1.5dvh, 0.82rem);
-  color: var(--text-h);
+  color: var(--text);
   line-height: 1.3;
   min-height: 0;
-}
-
-.activityIcon {
-  flex-shrink: 0;
-  opacity: 0.85;
+  opacity: 0.8;
 }
 
 .activityText {
@@ -219,6 +204,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
 }
 
 .loading {
@@ -232,19 +218,29 @@
 @media (min-width: 48rem) {
   .methods {
     grid-template-columns: 1fr 1fr;
+    gap: clamp(0.75rem, 2vw, 1.25rem);
+  }
+
+  .methodCard {
+    min-height: clamp(6.5rem, 22dvh, 9rem);
   }
 }
 
-@media (min-width: 48rem) and (min-height: 32rem) {
-  .metrics {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-    align-items: stretch;
+@media (max-height: 32rem) {
+  .methodCard {
+    min-height: clamp(4.5rem, 16dvh, 6rem);
+    padding: clamp(0.5rem, 1.4dvh, 0.85rem);
   }
 
-  .cashSection {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
+  .methodIcon {
+    font-size: clamp(2rem, 5.5dvh, 2.75rem);
+  }
+
+  .pageTitle {
+    font-size: clamp(1.25rem, 3.5dvh, 1.6rem);
+  }
+
+  .feeValue {
+    font-size: clamp(1.35rem, 3.8dvh, 1.85rem);
   }
 }

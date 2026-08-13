@@ -11,6 +11,8 @@ class Settings(CommonSettings):
     door_unlock_seconds: int = Field(default=5, alias="DOOR_UNLOCK_SECONDS")
     cash_session_timeout_seconds: int = Field(default=20, alias="CASH_SESSION_TIMEOUT_SECONDS")
     management_pin: str = Field(default="", alias="MANAGEMENT_PIN")
+    # When unset, Secure cookies are enabled outside local/dev/test environments.
+    management_cookie_secure: bool | None = Field(default=None, alias="MANAGEMENT_COOKIE_SECURE")
     # How long a scanned fingerprint waits for staff confirmation before it is dropped.
     fingerprint_approval_timeout_seconds: int = Field(
         default=25, alias="FINGERPRINT_APPROVAL_TIMEOUT_SECONDS"
@@ -30,3 +32,10 @@ class Settings(CommonSettings):
 
 
 settings = Settings()
+
+
+def management_cookie_secure_enabled() -> bool:
+    """Return whether the management session cookie should use the Secure flag."""
+    if settings.management_cookie_secure is not None:
+        return settings.management_cookie_secure
+    return settings.environment.lower() not in ("dev", "local", "test")

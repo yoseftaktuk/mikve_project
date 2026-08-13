@@ -2,6 +2,7 @@
   max-width: 26rem;
   margin: 0 auto;
   width: 100%;
+  zoom: 2;
 }
 
 .toolbar {
@@ -81,6 +82,11 @@
   font-weight: 600;
 }
 
+.primaryButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .primaryButton:hover:not(:disabled) {
   filter: brightness(0.98);
 }
@@ -95,6 +101,13 @@
   margin: 0.5rem 0 0;
   font-size: var(--text-fluid-sm);
   color: #ef4444;
+}
+
+.success {
+  margin: 0.75rem 0 0;
+  font-size: var(--text-fluid-sm);
+  font-weight: 600;
+  color: #16a34a;
 }
 
 .progress {

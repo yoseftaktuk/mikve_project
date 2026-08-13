@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { managementApi } from '../../../app/managementApi'
+import { api } from '../../../app/api'
 import { formatMoney, parseShekelsToCents } from '../../../app/money'
-import { useManagementAuth } from '../../../hooks/useManagementAuth'
+import { normalizeNationalId } from '../../../app/nationalId'
 import type { EnrollStartResponse, EnrollState, EnrollStep } from '../../../types/fingerprint'
 
 const IDLE_STATE: EnrollState = {
   step: 'idle',
   sessionId: null,
   holderName: null,
+  nationalId: null,
   slot: null,
   balanceCents: null,
 }
@@ -35,11 +36,10 @@ function isEnrollStep(value: unknown): value is EnrollStep {
   return typeof value === 'string' && value in STEP_MESSAGES
 }
 
-/** Runs a PIN-protected fingerprint enrollment and follows its live progress. */
+/** Runs fingerprint enrollment and follows its live progress. */
 export function useFingerprintEnrollPage() {
-  const { authenticated, pin, setPin, pinError, pinLoading, onPinSubmit, logout } = useManagementAuth()
-
   const [holderName, setHolderName] = useState('')
+  const [nationalId, setNationalId] = useState('')
   const [initialAmountShekels, setInitialAmountShekels] = useState('')
   const [enroll, setEnroll] = useState<EnrollState>(IDLE_STATE)
   const [error, setError] = useState<string | null>(null)
@@ -60,7 +60,9 @@ export function useFingerprintEnrollPage() {
         step?: string
         slot?: number | null
         holder_name?: string | null
+        national_id?: string | null
         balance_cents?: number
+        reason?: string
       }
       try {
         event = JSON.parse(msg.data)
@@ -72,6 +74,12 @@ export function useFingerprintEnrollPage() {
 
       if (event.type === 'fingerprint.enroll_progress' && isEnrollStep(event.step)) {
         const step = event.step
+        if (step === 'failed' && event.reason === 'national_id_taken') {
+          sessionIdRef.current = null
+          setError('תעודת הזהות כבר רשומה במערכת.')
+          setEnroll((current) => ({ ...current, step: 'failed' }))
+          return
+        }
         setEnroll((current) => ({ ...current, step, slot: event.slot ?? current.slot }))
         return
       }
@@ -82,6 +90,7 @@ export function useFingerprintEnrollPage() {
           step: 'registered',
           sessionId: event.session_id,
           holderName: event.holder_name ?? null,
+          nationalId: event.national_id ?? null,
           slot: event.slot ?? null,
           balanceCents: event.balance_cents ?? null,
         })
@@ -98,6 +107,11 @@ export function useFingerprintEnrollPage() {
         setError('הזן שם מלא (לפחות 2 תווים).')
         return
       }
+      const normalizedId = normalizeNationalId(nationalId)
+      if (!normalizedId) {
+        setError('הזן תעודת זהות ישראלית תקינה (9 ספרות).')
+        return
+      }
       const initialAmountCents = initialAmountShekels.trim()
         ? parseShekelsToCents(initialAmountShekels)
         : 0
@@ -109,8 +123,9 @@ export function useFingerprintEnrollPage() {
       setSubmitting(true)
       setError(null)
       try {
-        const res = await managementApi.post<EnrollStartResponse>('/access/management/fingerprint/enroll', {
+        const res = await api.post<EnrollStartResponse>('/access/management/fingerprint/enroll', {
           holder_name: name,
+          national_id: normalizedId,
           initial_amount_cents: initialAmountCents,
         })
         sessionIdRef.current = res.data.session_id
@@ -118,16 +133,25 @@ export function useFingerprintEnrollPage() {
           step: 'starting',
           sessionId: res.data.session_id,
           holderName: res.data.holder_name,
+          nationalId: res.data.national_id,
           slot: null,
           balanceCents: null,
         })
-      } catch {
-        setError('לא ניתן להתחיל רישום. ודא שקורא טביעות האצבע מחובר.')
+      } catch (err: unknown) {
+        const code =
+          err && typeof err === 'object' && 'response' in err
+            ? (err as { response?: { data?: { code?: string } } }).response?.data?.code
+            : undefined
+        if (code === 'invalid_national_id') {
+          setError('הזן תעודת זהות ישראלית תקינה (9 ספרות).')
+        } else {
+          setError('לא ניתן להתחיל רישום. ודא שקורא טביעות האצבע מחובר.')
+        }
       } finally {
         setSubmitting(false)
       }
     },
-    [holderName, initialAmountShekels],
+    [holderName, nationalId, initialAmountShekels],
   )
 
   const cancel = useCallback(async () => {
@@ -136,7 +160,7 @@ export function useFingerprintEnrollPage() {
     setEnroll((current) => ({ ...current, step: 'cancelled' }))
     if (!sessionId) return
     try {
-      await managementApi.post('/access/management/fingerprint/enroll/cancel', { session_id: sessionId })
+      await api.post('/access/management/fingerprint/enroll/cancel', { session_id: sessionId })
     } catch {
       setError('הביטול לא הגיע לקורא. הרישום יתפוגג מעצמו.')
     }
@@ -147,6 +171,7 @@ export function useFingerprintEnrollPage() {
     setEnroll(IDLE_STATE)
     setError(null)
     setHolderName('')
+    setNationalId('')
     setInitialAmountShekels('')
   }, [])
 
@@ -155,15 +180,10 @@ export function useFingerprintEnrollPage() {
   const stepIndex = STEP_ORDER.indexOf(enroll.step)
 
   return {
-    authenticated,
-    pin,
-    setPin,
-    pinError,
-    pinLoading,
-    onPinSubmit,
-    logout,
     holderName,
     setHolderName,
+    nationalId,
+    setNationalId,
     initialAmountShekels,
     setInitialAmountShekels,
     enroll,

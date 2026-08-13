@@ -9,7 +9,16 @@ type GateStatus = {
 
 /** Management auth and manual door controls. */
 export function useManagementPage() {
-  const { authenticated, pin, setPin, pinError, pinLoading, onPinSubmit, logout: clearAuth } = useManagementAuth()
+  const {
+    authenticated,
+    authChecking,
+    pin,
+    setPin,
+    pinError,
+    pinLoading,
+    onPinSubmit,
+    logout: clearAuth,
+  } = useManagementAuth()
 
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
@@ -21,9 +30,10 @@ export function useManagementPage() {
   }, [])
 
   const logout = useCallback(() => {
-    clearAuth()
-    setActionError(null)
-    setActionSuccess(null)
+    void clearAuth().finally(() => {
+      setActionError(null)
+      setActionSuccess(null)
+    })
   }, [clearAuth])
 
   const openDoor = useCallback(async () => {
@@ -43,6 +53,7 @@ export function useManagementPage() {
 
   return {
     authenticated,
+    authChecking,
     pin,
     setPin,
     pinError,

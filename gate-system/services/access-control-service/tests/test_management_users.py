@@ -20,6 +20,7 @@ from app.management import (
 class FakeFingerprintsClient:
     users: dict[str, LedgerUser] = field(default_factory=dict)
     deleted: list[str] = field(default_factory=list)
+    adjusts: list[dict] = field(default_factory=list)
 
     async def list_users(self) -> list[LedgerUser]:
         return list(self.users.values())
@@ -29,8 +30,10 @@ class FakeFingerprintsClient:
         chip_id: str,
         *,
         holder_name: str | None = None,
+        national_id: str | None = None,
         is_enabled: bool | None = None,
         set_holder_name: bool = False,
+        set_national_id: bool = False,
         set_is_enabled: bool = False,
     ) -> LedgerUser:
         user = self.users.get(chip_id)
@@ -40,6 +43,7 @@ class FakeFingerprintsClient:
             chip_id=user.chip_id,
             uid=user.uid,
             holder_name=holder_name if set_holder_name else user.holder_name,
+            national_id=national_id if set_national_id else user.national_id,
             is_enabled=is_enabled if set_is_enabled and is_enabled is not None else user.is_enabled,
             balance_cents=user.balance_cents,
             created_at=user.created_at,
@@ -49,6 +53,33 @@ class FakeFingerprintsClient:
 
     async def get_by_id(self, chip_id: str) -> LedgerUser | None:
         return self.users.get(chip_id)
+
+    async def adjust_balance(
+        self,
+        chip_id: str,
+        delta_cents: int,
+        reason: str,
+        description: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> int:
+        user = self.users.get(chip_id)
+        if user is None:
+            raise ValueError("chip_not_found")
+        new_bal = user.balance_cents + delta_cents
+        if new_bal < 0:
+            raise ValueError("insufficient_balance")
+        updated = LedgerUser(
+            chip_id=user.chip_id,
+            uid=user.uid,
+            holder_name=user.holder_name,
+            national_id=user.national_id,
+            is_enabled=user.is_enabled,
+            balance_cents=new_bal,
+            created_at=user.created_at,
+        )
+        self.users[chip_id] = updated
+        self.adjusts.append({"delta_cents": delta_cents, "reason": reason})
+        return new_bal
 
     async def delete_user(self, chip_id: str) -> None:
         if chip_id not in self.users:
@@ -107,6 +138,72 @@ async def test_update_user_renames_and_disables():
     )
     assert updated.holder_name == "חדש"
     assert updated.is_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_update_user_sets_absolute_balance_increase():
+    client = FakeFingerprintsClient(
+        users={
+            "c1": LedgerUser(
+                chip_id="c1",
+                uid="FP-010",
+                holder_name="א",
+                is_enabled=True,
+                balance_cents=500,
+            )
+        }
+    )
+    updated = await update_user(
+        "c1",
+        ManagementUserUpdateRequest(balance_cents=2000),
+        client,  # type: ignore[arg-type]
+    )
+    assert updated.balance_cents == 2000
+    assert client.adjusts == [{"delta_cents": 1500, "reason": "management_set_balance"}]
+
+
+@pytest.mark.asyncio
+async def test_update_user_sets_absolute_balance_decrease():
+    client = FakeFingerprintsClient(
+        users={
+            "c1": LedgerUser(
+                chip_id="c1",
+                uid="FP-011",
+                holder_name="ב",
+                is_enabled=True,
+                balance_cents=2000,
+            )
+        }
+    )
+    updated = await update_user(
+        "c1",
+        ManagementUserUpdateRequest(balance_cents=500),
+        client,  # type: ignore[arg-type]
+    )
+    assert updated.balance_cents == 500
+    assert client.adjusts == [{"delta_cents": -1500, "reason": "management_set_balance"}]
+
+
+@pytest.mark.asyncio
+async def test_update_user_skips_adjust_when_balance_unchanged():
+    client = FakeFingerprintsClient(
+        users={
+            "c1": LedgerUser(
+                chip_id="c1",
+                uid="FP-012",
+                holder_name="ג",
+                is_enabled=True,
+                balance_cents=1500,
+            )
+        }
+    )
+    updated = await update_user(
+        "c1",
+        ManagementUserUpdateRequest(balance_cents=1500),
+        client,  # type: ignore[arg-type]
+    )
+    assert updated.balance_cents == 1500
+    assert client.adjusts == []
 
 
 @pytest.mark.asyncio

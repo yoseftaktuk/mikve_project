@@ -26,6 +26,7 @@ export type EnrollState = {
   step: EnrollStep
   sessionId: string | null
   holderName: string | null
+  nationalId: string | null
   slot: number | null
   balanceCents: number | null
 }
@@ -33,5 +34,6 @@ export type EnrollState = {
 export type EnrollStartResponse = {
   session_id: string
   holder_name: string
+  national_id: string
   initial_amount_cents: number
 }

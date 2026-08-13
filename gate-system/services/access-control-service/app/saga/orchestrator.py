@@ -285,12 +285,99 @@ class AccessOrchestrator:
                     attempt_id=attempt.id,
                     amount_cents=fee,
                     status="pending",
-                    provider="chip",
+                    provider="subscription" if fee == 0 else "chip",
                     idempotency_key=key,
                     correlation_id=attempt.correlation_id,
                 )
             )
             await db.flush()
+
+        if fee == 0:
+            try:
+                await self._chip.mark_subscription_free_entry(chip_id)
+            except ValueError:
+                await self._fail_never_charged(repo, attempt, "subscription_inactive")
+                await self._legacy_deny(
+                    db, uid=uid, chip_id=chip_id, reason="subscription_inactive", fee=fee, before=before
+                )
+                await db.commit()
+                await self._publish_denied(
+                    uid=uid, chip_id=chip_id, reason="subscription_inactive", fee=fee, balance=before
+                )
+                return AccessDecisionResponse(
+                    granted=False,
+                    reason="subscription_inactive",
+                    chip_id=chip_id,
+                    fee_cents=fee,
+                    balance_before_cents=before,
+                    balance_after_cents=before,
+                )
+            except Exception:
+                logger.exception("subscription_free_entry_failed attempt_id=%s", attempt.id)
+                await self._fail_never_charged(repo, attempt, "subscription_unavailable")
+                await db.commit()
+                return AccessDecisionResponse(
+                    granted=False,
+                    reason="subscription_unavailable",
+                    chip_id=chip_id,
+                    fee_cents=fee,
+                    balance_before_cents=before,
+                    balance_after_cents=before,
+                )
+            after = before
+            pay = await repo.get_payment_by_key(key)
+            if pay is not None:
+                pay.status = "succeeded"
+            await repo.transition(
+                attempt.id,
+                STATUS_VALIDATED,
+                STATUS_CHARGED,
+                "subscription_free_entry",
+                charge_taken=False,
+                balance_after_cents=after,
+            )
+            await db.commit()
+
+            door_ok = await self._open_door_with_retries(repo, db, attempt)
+            if door_ok:
+                await repo.transition(attempt.id, STATUS_DOOR_OPENING, STATUS_COMPLETED, "door_confirmed")
+                await self._legacy_grant_chip(
+                    db, uid=uid, chip_id=chip_id, fee=fee, before=before, after=after
+                )
+                await db.commit()
+                await self._cash.clear_for_other_method()
+                await self._emit(
+                    {
+                        "type": "access.granted",
+                        "uid": uid,
+                        "chip_id": chip_id,
+                        "method": "subscription",
+                        "holder_name": holder_name,
+                        "fee_cents": fee,
+                        "balance_after_cents": after,
+                        "attempt_id": str(attempt.id),
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                return AccessDecisionResponse(
+                    granted=True,
+                    reason="ok",
+                    chip_id=chip_id,
+                    fee_cents=fee,
+                    balance_before_cents=before,
+                    balance_after_cents=after,
+                )
+            # Free entry already marked; no balance to refund (charge_taken=False).
+            await self._begin_compensation(repo, db, attempt)
+            refreshed = await repo.get(attempt.id)
+            return AccessDecisionResponse(
+                granted=False,
+                reason=(refreshed.failure_reason if refreshed else None) or "door_failed",
+                chip_id=chip_id,
+                fee_cents=fee,
+                balance_before_cents=before,
+                balance_after_cents=after,
+            )
 
         try:
             after = await self._chip.adjust_balance(

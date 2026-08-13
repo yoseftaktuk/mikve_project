@@ -10,6 +10,7 @@ import { useManagementPage } from './useManagementPage'
 export function ManagementPage() {
   const {
     authenticated,
+    authChecking,
     pin,
     setPin,
     pinError,
@@ -30,6 +31,16 @@ export function ManagementPage() {
       ? { title: 'ניהול', subtitle: 'פתיחת דלת וניהול רשומים' }
       : { title: 'ניהול', subtitle: 'הזן קוד סודי לכניסה' },
   )
+
+  if (authChecking) {
+    return (
+      <PageShell variant="centered">
+        <StatusCard className={styles.pinCard}>
+          <p className={statusCardStyles.hint}>בודק הרשאה…</p>
+        </StatusCard>
+      </PageShell>
+    )
+  }
 
   if (!authenticated) {
     return (
@@ -111,6 +122,30 @@ export function ManagementPage() {
                         disabled={users.saving}
                       />
                     </label>
+                    <label className={styles.formField}>
+                      תעודת זהות
+                      <input
+                        value={users.editNationalId}
+                        onChange={(e) =>
+                          users.setEditNationalId(e.target.value.replace(/\D/g, '').slice(0, 9))
+                        }
+                        inputMode="numeric"
+                        className={styles.input}
+                        disabled={users.saving}
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      יתרה (₪)
+                      <input
+                        value={users.editBalanceShekels}
+                        onChange={(e) => users.setEditBalanceShekels(e.target.value)}
+                        inputMode="decimal"
+                        className={styles.input}
+                        placeholder="0"
+                        disabled={users.saving}
+                      />
+                    </label>
                     <label className={styles.checkboxField}>
                       <input
                         type="checkbox"
@@ -137,6 +172,7 @@ export function ManagementPage() {
                         {!user.is_enabled && <span className={styles.badgeDisabled}>חסום</span>}
                       </div>
                       <div className={styles.userSub}>
+                        {user.national_id ? `${user.national_id} · ` : ''}
                         {user.uid} · {formatMoney(user.balance_cents)}
                       </div>
                     </div>

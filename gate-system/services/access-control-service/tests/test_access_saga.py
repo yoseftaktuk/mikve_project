@@ -58,6 +58,7 @@ class FakeFingerprintsClient:
     def __init__(self, chips: dict[str, FakeChip]) -> None:
         self.chips = chips
         self.adjusts: list[dict] = []
+        self.free_entries: list[str] = []
 
     async def validate(self, uid: str) -> FakeChip:
         chip = self.chips.get(uid)
@@ -84,6 +85,9 @@ class FakeFingerprintsClient:
         chip.balance_cents = new_bal
         self.adjusts.append({"delta_cents": delta_cents, "idempotency_key": idempotency_key})
         return chip.balance_cents
+
+    async def mark_subscription_free_entry(self, chip_id: str) -> None:
+        self.free_entries.append(chip_id)
 
 
 class FakeHardwareClient:
@@ -228,6 +232,44 @@ async def test_fingerprint_happy_path_charges_with_idempotency_key():
         assert chips["FP-001"].balance_cents == fee * 2
         assert chip_client.adjusts[0]["idempotency_key"].startswith("access-charge:")
         assert any(e.get("type") == "access.granted" for e in events)
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_subscription_zero_fee_skips_balance_charge():
+    chip_id = str(uuid.uuid4())
+    chips = {"FP-001": FakeChip(chip_id=chip_id, uid="FP-001", balance_cents=0)}
+    chip_client = FakeFingerprintsClient(chips)
+    events: list[dict] = []
+    db = FakeDb()
+    patches = _patch_repo()
+    for p in patches:
+        p.start()
+    try:
+        orch = AccessOrchestrator(
+            chip_client=chip_client,  # type: ignore[arg-type]
+            hardware_client=FakeHardwareClient(),  # type: ignore[arg-type]
+            cash_session=CashSession(timeout_seconds=20),
+            publish=events.append,
+        )
+        result = await orch.run_fingerprint_approve(
+            approval_id="appr-sub",
+            uid="FP-001",
+            chip_id=chip_id,
+            holder_name="Test",
+            balance_cents=0,
+            fee_cents=0,
+            db=db,  # type: ignore[arg-type]
+        )
+        assert result.granted is True
+        assert chips["FP-001"].balance_cents == 0
+        assert chip_client.adjusts == []
+        assert chip_client.free_entries == [chip_id]
+        granted = next(e for e in events if e.get("type") == "access.granted")
+        assert granted["method"] == "subscription"
+        assert granted["fee_cents"] == 0
     finally:
         for p in patches:
             p.stop()

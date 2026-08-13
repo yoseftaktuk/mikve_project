@@ -8,19 +8,17 @@ import styles from './MoneyTopupPage.module.css'
 /** Desk screen: wait for a fingerprint, then top up via Nedarim Plus. */
 export function MoneyTopupPage() {
   const {
-    authenticated,
-    pin,
-    setPin,
-    pinError,
-    pinLoading,
-    onPinSubmit,
-    logout,
     phase,
     user,
     error,
+    lastTopupSuccess,
     identifyReady,
     showCardDialog,
+    cardDialogProduct,
+    hebrewMonthName,
+    subscriptionPriceCents,
     openCardTopup,
+    openSubscriptionPurchase,
     closeCardTopup,
     onPaid,
     scanAnother,
@@ -35,44 +33,12 @@ export function MoneyTopupPage() {
 
   usePageMeta({
     title: 'טעינת יתרה',
-    subtitle: authenticated ? 'סריקת אצבע וטעינה באשראי' : 'הזן קוד סודי לכניסה',
+    subtitle: 'סריקת אצבע וטעינה באשראי',
   })
-
-  if (!authenticated) {
-    return (
-      <PageShell variant="centered">
-        <StatusCard className={styles.card}>
-          <form onSubmit={onPinSubmit}>
-            <label className={styles.formField}>
-              קוד סודי
-              <input
-                type="password"
-                inputMode="numeric"
-                autoComplete="off"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                className={`${styles.input} ${styles.inputPin}`}
-              />
-            </label>
-            {pinError && <p className={styles.error}>{pinError}</p>}
-            <button type="submit" className={styles.submitButton} disabled={pinLoading || !pin}>
-              {pinLoading ? 'בודק…' : 'כניסה'}
-            </button>
-          </form>
-        </StatusCard>
-      </PageShell>
-    )
-  }
 
   return (
     <PageShell variant="centered">
       <div className={styles.card}>
-        <div className={styles.toolbar}>
-          <button type="button" className={styles.logoutButton} onClick={logout}>
-            יציאה
-          </button>
-        </div>
-
         <StatusCard>
           {phase === 'waiting' && (
             <div className={styles.progress}>
@@ -121,11 +87,38 @@ export function MoneyTopupPage() {
                   <span>יתרה</span>
                   <b>{formatMoney(user.balanceCents)}</b>
                 </div>
+                <div className={styles.summaryRow}>
+                  <span>מנוי חודשי</span>
+                  <b>
+                    {user.subscriptionActive
+                      ? `פעיל (${user.subscriptionMonthName || user.currentHebrewMonthName || 'החודש'})`
+                      : 'אין'}
+                  </b>
+                </div>
               </div>
+              {lastTopupSuccess && <p className={styles.success}>{lastTopupSuccess}</p>}
               <div className={styles.actions}>
                 <button type="button" className={styles.primaryButton} onClick={openCardTopup}>
                   טעינה באשראי
                 </button>
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  onClick={openSubscriptionPurchase}
+                  disabled={user.subscriptionActive}
+                  title={
+                    user.subscriptionActive
+                      ? 'כבר קיים מנוי פעיל לחודש העברי הנוכחי'
+                      : undefined
+                  }
+                >
+                  קניית מנוי חודשי לחודש{' '}
+                  {hebrewMonthName || user.currentHebrewMonthName || 'הנוכחי'} —{' '}
+                  {formatMoney(subscriptionPriceCents)}
+                </button>
+                {user.subscriptionActive ? (
+                  <p className={styles.hint}>כבר קיים מנוי פעיל לחודש העברי הנוכחי</p>
+                ) : null}
                 <button type="button" className={styles.submitButton} onClick={scanAnother}>
                   סרוק אצבע אחרת
                 </button>
@@ -166,8 +159,10 @@ export function MoneyTopupPage() {
 
       {showCardDialog && user && (
         <CardTopupDialog
-          chipUid={user.uid}
+          fingerprintUid={user.uid}
           formatMoney={formatMoney}
+          product={cardDialogProduct}
+          hebrewMonthName={hebrewMonthName || user.currentHebrewMonthName}
           onClose={closeCardTopup}
           onPaid={onPaid}
         />

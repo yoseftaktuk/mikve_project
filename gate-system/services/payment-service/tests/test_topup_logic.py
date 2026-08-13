@@ -6,7 +6,13 @@ from dataclasses import dataclass
 import pytest
 
 from app.clients import ChipValidation
-from app.models import STATUS_ABANDONED, STATUS_FAILED, STATUS_PENDING, CardTopup
+from app.models import (
+    PRODUCT_MONTHLY_SUBSCRIPTION,
+    STATUS_ABANDONED,
+    STATUS_FAILED,
+    STATUS_PENDING,
+    CardTopup,
+)
 from app.nedarim_plus import CreateTransactionCommand, CreateTransactionResult, NedarimError
 from app.topup_logic import abandon_card_topup, create_card_topup, get_card_topup
 from gate_shared.errors import AppError
@@ -86,6 +92,7 @@ def public_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.topup_logic.settings.nedarim_groupe", "כניסה")
     monkeypatch.setattr("app.topup_logic.settings.nedarim_iframe_url", "https://www.matara.pro/nedarimplus/iframe/")
     monkeypatch.setattr("app.topup_logic.settings.topup_amounts_cents", "2000,5000,10000")
+    monkeypatch.setattr("app.topup_logic.settings.subscription_price_cents", 30000)
 
 
 def enabled_chip(uid: str = "FP-001", balance: int = 0) -> ChipValidation:
@@ -105,7 +112,7 @@ async def test_create_card_topup_happy_path(public_url: None) -> None:
     nedarim = FakePaymentProvider(result=CreateTransactionResult(transaction_id="NED-1"))
 
     created = await create_card_topup(
-        chip_uid=chip.uid,
+        fingerprint_uid=chip.uid,
         amount_cents=5000,
         db=db,  # type: ignore[arg-type]
         chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
@@ -134,7 +141,7 @@ async def test_create_rejects_amount_outside_presets(public_url: None) -> None:
     chip = enabled_chip()
     with pytest.raises(AppError) as exc:
         await create_card_topup(
-            chip_uid=chip.uid,
+            fingerprint_uid=chip.uid,
             amount_cents=1234,
             db=FakeDb(),  # type: ignore[arg-type]
             chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
@@ -147,7 +154,7 @@ async def test_create_rejects_amount_outside_presets(public_url: None) -> None:
 async def test_create_rejects_unknown_chip(public_url: None) -> None:
     with pytest.raises(AppError) as exc:
         await create_card_topup(
-            chip_uid="FP-999",
+            fingerprint_uid="FP-999",
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
             chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
@@ -166,7 +173,7 @@ async def test_create_rejects_disabled_chip(public_url: None) -> None:
     )
     with pytest.raises(AppError) as exc:
         await create_card_topup(
-            chip_uid=chip.uid,
+            fingerprint_uid=chip.uid,
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
             chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
@@ -183,7 +190,7 @@ async def test_create_requires_public_base_url(monkeypatch: pytest.MonkeyPatch) 
     chip = enabled_chip()
     with pytest.raises(AppError) as exc:
         await create_card_topup(
-            chip_uid=chip.uid,
+            fingerprint_uid=chip.uid,
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
             chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
@@ -200,7 +207,7 @@ async def test_create_marks_failed_when_nedarim_rejects(public_url: None) -> Non
 
     with pytest.raises(AppError) as exc:
         await create_card_topup(
-            chip_uid=chip.uid,
+            fingerprint_uid=chip.uid,
             amount_cents=2000,
             db=db,  # type: ignore[arg-type]
             chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
@@ -219,7 +226,7 @@ async def test_get_and_abandon(public_url: None) -> None:
     chip = enabled_chip()
     db = FakeDb()
     created = await create_card_topup(
-        chip_uid=chip.uid,
+        fingerprint_uid=chip.uid,
         amount_cents=2000,
         db=db,  # type: ignore[arg-type]
         chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
@@ -234,3 +241,63 @@ async def test_get_and_abandon(public_url: None) -> None:
     with pytest.raises(AppError) as exc:
         await abandon_card_topup(created.topup_id, db)  # type: ignore[arg-type]
     assert exc.value.code == "topup_not_pending"
+
+
+@pytest.mark.asyncio
+async def test_create_subscription_purchase(public_url: None) -> None:
+    chip = enabled_chip()
+    db = FakeDb()
+    nedarim = FakePaymentProvider(result=CreateTransactionResult(transaction_id="NED-SUB"))
+
+    created = await create_card_topup(
+        fingerprint_uid=chip.uid,
+        amount_cents=30000,
+        product=PRODUCT_MONTHLY_SUBSCRIPTION,
+        db=db,  # type: ignore[arg-type]
+        chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        payment_provider=nedarim,  # type: ignore[arg-type]
+    )
+
+    assert created.product == PRODUCT_MONTHLY_SUBSCRIPTION
+    assert created.amount_cents == 30000
+    stored = db.rows[created.topup_id]
+    assert stored.product == PRODUCT_MONTHLY_SUBSCRIPTION
+    assert nedarim.calls is not None
+    assert "subscription" in nedarim.calls[0].comment
+
+
+@pytest.mark.asyncio
+async def test_create_subscription_rejects_wrong_amount(public_url: None) -> None:
+    chip = enabled_chip()
+    with pytest.raises(AppError) as exc:
+        await create_card_topup(
+            fingerprint_uid=chip.uid,
+            amount_cents=2000,
+            product=PRODUCT_MONTHLY_SUBSCRIPTION,
+            db=FakeDb(),  # type: ignore[arg-type]
+            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
+        )
+    assert exc.value.code == "invalid_amount"
+
+
+@pytest.mark.asyncio
+async def test_create_subscription_rejects_when_already_active(public_url: None) -> None:
+    chip = ChipValidation(
+        chip_id=chip_id_for("FP-001"),
+        uid="FP-001",
+        is_enabled=True,
+        balance_cents=0,
+        subscription_active=True,
+        subscription_month_name="אב",
+    )
+    with pytest.raises(AppError) as exc:
+        await create_card_topup(
+            fingerprint_uid=chip.uid,
+            amount_cents=30000,
+            product=PRODUCT_MONTHLY_SUBSCRIPTION,
+            db=FakeDb(),  # type: ignore[arg-type]
+            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
+        )
+    assert exc.value.code == "subscription_already_active"

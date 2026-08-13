@@ -280,10 +280,14 @@ curl -X POST http://<PI-IP>/api/fingerprints/fingerprints/<CHIP_ID>/balance/adju
 כל אצבע נשמרת בחיישן עצמו (ההשוואה מתבצעת שם), והמערכת שומרת רק **כרטיס וירטואלי** עם ה-UID `FP-<slot>` — לכן טעינת יתרה, היסטוריה ודף הניהול עובדים עליה בדיוק כמו על צ'יפ רגיל:
 
 ```bash
-# טעינת יתרה לאצבע שנרשמה בחריץ 12 (דרך דף הניהול או ישירות)
-curl -X POST http://<PI-IP>/api/access/management/chip/topup \
+# התחברות ניהול (שומרת HttpOnly cookie בקובץ)
+curl -c cookies.txt -X POST http://<PI-IP>/api/access/management/auth \
   -H "Content-Type: application/json" \
-  -H "X-Management-Token: <TOKEN>" \
+  -d '{"pin": "<MANAGEMENT_PIN>"}'
+
+# טעינת יתרה לאצבע שנרשמה בחריץ 12 (דרך דף הניהול או ישירות)
+curl -b cookies.txt -X POST http://<PI-IP>/api/access/management/chip/topup \
+  -H "Content-Type: application/json" \
   -d '{"uid": "FP-012", "amount_cents": 5000}'
 ```
 
@@ -560,6 +564,107 @@ Copy that URL into `services/payment-service/.env` as `PUBLIC_BASE_URL`, restart
 
 Fingerprint with balance &lt; entrance fee → Coins / Credit card / Cancel → presets ₪20 / ₪50 / ₪100 → Nedarim iframe → CallBack credits chip balance → scan again to enter. Coins still pay the door fee in-session; they do not top up balance.
 
+## Nedarim Plus institution webhook
+
+This path handles donations made through the **normal Nedarim Plus payment interface**, not the kiosk iframe. The donor is identified **only** by Nedarim `Zeout` → `Chip.national_id`. Name, phone, email, and `ClientId` are never used.
+
+Exact `Groupe` match (no trim):
+
+| Groupe | Action |
+|--------|--------|
+| `NEDARIM_TARGET_GROUP` (default `מנוי מקווה חודש`) | Activate a Hebrew-month subscription. Balance unchanged. |
+| `NEDARIM_BALANCE_GROUP` (default `ערך צבור למקווה`) | Credit chip ledger balance by `Amount`. No subscription. |
+
+Public URL (nginx prefix `/api/payments/`):
+
+```
+https://$PUBLIC_BASE_URL/api/payments/nedarim/webhook
+```
+
+Use the same `PUBLIC_BASE_URL` already set for the kiosk CallBack (Cloudflare Tunnel hostname). Do not invent a domain. The webhook is **not live** until Nedarim Plus customer service configures the institution Callback to this URL (regular transactions and/or Keva as you request).
+
+### What gets processed
+
+Shared conditions for both categories:
+
+1. Request passed source checks (Nedarim IPs `18.196.146.117` / `18.194.219.73`, plus `CF-Connecting-IP` when `NEDARIM_REQUIRE_CLOUDFLARE=true`)
+2. `TransactionId` is present and has not already been processed (unique DB constraint)
+3. `Groupe` equals `NEDARIM_TARGET_GROUP` or `NEDARIM_BALANCE_GROUP` **exactly**
+4. `Zeout` normalizes to a 9-digit national ID that matches exactly one chip
+5. `Amount` is a positive shekel amount (stored as agorot; no floats)
+6. `Currency` is `1` (ILS). `2` (USD) is recorded as invalid and is not credited
+7. The same `TransactionId` was not already credited via the kiosk CallBack
+
+Then:
+
+- **Subscription Groupe:** fingerprints-service `activate_subscription` for the current Hebrew month. Ledger balance is unchanged. If the chip already has this month's membership, status is `failed` with `subscription_already_active`.
+- **Stored-value Groupe:** `adjust_balance` by the donation amount (`idempotency_key=nedarim:{TransactionId}`).
+
+Otherwise the row is stored (`ignored_category` / `user_unresolved` / `invalid` / `duplicate` / `failed`) and neither membership nor balance changes.
+
+Chips that should receive these donations must have `national_id` set to the same 9-digit Zeout Nedarim sends.
+
+### Local curl (development only)
+
+```env
+# services/payment-service/.env
+ENVIRONMENT=dev
+NEDARIM_REQUIRE_CLOUDFLARE=false
+NEDARIM_WEBHOOK_ALLOW_LOCAL=true
+```
+
+`NEDARIM_WEBHOOK_ALLOW_LOCAL` is ignored when `ENVIRONMENT=production`. It does not disable kiosk CallBack IP checks.
+
+```bash
+curl -X POST http://localhost/api/payments/nedarim/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "TransactionId": "LOCAL-TEST-001",
+    "Zeout": "123456789",
+    "Amount": "50",
+    "Currency": "1",
+    "Groupe": "מנוי מקווה חודש"
+  }'
+```
+
+Set the flags back before production: `NEDARIM_REQUIRE_CLOUDFLARE=true`, `NEDARIM_WEBHOOK_ALLOW_LOCAL=false`.
+
+### Cloudflare Tunnel testing (before asking Nedarim to activate)
+
+```
+Nedarim Plus (or your curl from a Nedarim IP / after WAF allow)
+    → Cloudflare public URL
+    → Cloudflare Tunnel
+    → nginx :80
+    → payment-service POST /nedarim/webhook
+```
+
+1. Named tunnel: public hostname = `PUBLIC_BASE_URL` host, service `http://nginx:80`. Path-filtered example: `deploy/cloudflared/config.example.yml` (includes `/api/payments/nedarim/webhook`).
+2. Quick tunnel: `docker compose --profile quick-tunnel up cloudflared-quick`, copy the `https://xxxx.trycloudflare.com` URL into `PUBLIC_BASE_URL`, restart `payment-service`.
+3. Confirm `GET https://$PUBLIC_BASE_URL/api/payments/healthz` succeeds.
+4. POST a test JSON to `https://$PUBLIC_BASE_URL/api/payments/nedarim/webhook`. Production-like tests must send `CF-Connecting-IP` from a Nedarim address (or use the local flags above only on a non-production stack).
+
+### Cloudflare WAF / firewall (required for production)
+
+Nedarim does **not** digitally sign webhooks. Restrict the webhook (and the kiosk callback) so only Nedarim can reach them:
+
+1. Cloudflare Zero Trust / WAF **IP Access Rule** (or custom WAF rule) on:
+   - `/api/payments/nedarim/webhook`
+   - `/api/payments/nedarim/callback`
+2. Allow only `18.196.146.117` and `18.194.219.73`. Block everyone else.
+3. Keep `NEDARIM_REQUIRE_CLOUDFLARE=true` so the app requires `CF-Connecting-IP` (set by Cloudflare, forwarded by nginx). Do not treat a request as Nedarim just because it reached FastAPI.
+4. There is no uvicorn `--forwarded-allow-ips` middleware. Production activation assumes Cloudflare Tunnel in front of nginx.
+
+### Nedarim Plus customer service
+
+Ask them to set the institution Callback/Webhook to:
+
+```
+https://<your PUBLIC_BASE_URL host>/api/payments/nedarim/webhook
+```
+
+Specify whether it should fire for regular transactions and/or credit-card recurring (Keva). Until they enable it, this endpoint will not receive production donations.
+
 ## Folder structure
 
 ```
@@ -592,7 +697,7 @@ Unit tests per service (each service has its own `pytest.ini`):
 ```bash
 cd services/access-control-service && pytest   # fingerprint approval/scan/enrollment logic
 cd services/hardware-service && pytest         # sensor driver against a fake AS608
-cd services/payment-service && pytest          # Nedarim create/callback/idempotency
+cd services/payment-service && pytest          # Nedarim create/callback/webhook/idempotency
 ```
 
 Dashboard checks:

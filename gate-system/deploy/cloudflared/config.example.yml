@@ -16,6 +16,11 @@ ingress:
     path: /api/payments/nedarim/callback
     service: http://nginx:80
 
+  # Institution-level webhook (donations not initiated by this app).
+  - hostname: gate-pay.example.org
+    path: /api/payments/nedarim/webhook
+    service: http://nginx:80
+
   # Kiosk top-up UI + payment-service APIs used by that UI
   # (create / status / abandon / healthz). SPA assets are under /.
   - hostname: gate-pay.example.org

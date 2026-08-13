@@ -1,8 +1,8 @@
 .sidebar {
   display: none;
   flex-direction: column;
-  gap: 0.35rem;
-  padding: var(--layout-pad);
+  gap: 0.25rem;
+  padding: clamp(0.5rem, 1.5vw, 0.75rem);
   border-inline-start: 1px solid var(--border);
   background: var(--code-bg);
   min-height: 0;
@@ -11,7 +11,7 @@
 
 .bottomNav {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.25rem;
   padding: 0.35rem var(--layout-pad) calc(0.35rem + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--border);
@@ -33,13 +33,13 @@
 .link {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.45rem;
   min-height: var(--touch-min);
-  padding: 0.55rem 0.75rem;
-  border-radius: 0.75rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.65rem;
   color: var(--text);
   text-decoration: none;
-  font-size: var(--text-fluid-base);
+  font-size: var(--text-fluid-sm);
   transition: background 0.15s, color 0.15s;
 }
 

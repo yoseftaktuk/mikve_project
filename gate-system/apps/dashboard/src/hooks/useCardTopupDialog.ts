@@ -1,22 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { extractApiErrorMessage } from '../app/paymentsApi'
+import type { CardTopupProduct } from '../types/topup'
 import { useCardTopup } from './useCardTopup'
 import { useNedarimIframe } from './useNedarimIframe'
 
 type UseCardTopupDialogParams = {
-  chipUid: string
+  fingerprintUid: string
+  product?: CardTopupProduct
+  hebrewMonthName?: string | null
   onClose: () => void
   onPaid: (balanceAfterCents: number) => void
 }
 
-/** Glues amount selection, Nedarim iframe or mock pay, and server status polling. */
-export function useCardTopupDialog({ chipUid, onClose, onPaid }: UseCardTopupDialogParams) {
-  const topup = useCardTopup(chipUid)
+/** Glues amount selection / fixed subscription, Nedarim iframe or mock pay, and polling. */
+export function useCardTopupDialog({
+  fingerprintUid,
+  product = 'balance',
+  hebrewMonthName,
+  onClose,
+  onPaid,
+}: UseCardTopupDialogParams) {
+  const topup = useCardTopup(fingerprintUid, { product })
   const [validateError, setValidateError] = useState<string | null>(null)
   const finishRef = useRef<(nedarimTransactionId: string) => void>(() => {})
   const createdIdRef = useRef<string | null>(null)
   const paidNotifiedRef = useRef(false)
   const isMock = topup.paymentMode === 'mock'
+  const isSubscription = product === 'monthly_subscription'
 
   const onClientTransactionResponse = topup.onClientTransactionResponse
   const setPhase = topup.setPhase
@@ -66,7 +76,7 @@ export function useCardTopupDialog({ chipUid, onClose, onPaid }: UseCardTopupDia
   }, [isMock, topup.phase, topup.created?.iframe_url, beginLoadWatch])
 
   useEffect(() => {
-    if (topup.phase === 'choose_amount') {
+    if (topup.phase === 'choose_amount' || topup.phase === 'creating') {
       paidNotifiedRef.current = false
     }
     if (topup.phase === 'paid' && !paidNotifiedRef.current) {
@@ -107,8 +117,12 @@ export function useCardTopupDialog({ chipUid, onClose, onPaid }: UseCardTopupDia
 
   return {
     phase: topup.phase,
+    product,
+    isSubscription,
     paymentMode: topup.paymentMode,
     amountsCents: topup.amountsCents,
+    subscriptionPriceCents: topup.subscriptionPriceCents,
+    hebrewMonthName: hebrewMonthName || topup.hebrewMonthName,
     created: topup.created,
     status: topup.status,
     error: topup.error,

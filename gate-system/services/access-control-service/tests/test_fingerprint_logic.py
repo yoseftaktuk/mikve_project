@@ -74,10 +74,34 @@ class FakeFingerprintsClient:
             assigned_user_id=chip.assigned_user_id,
             balance_cents=self.balances[chip.chip_id],
             holder_name=chip.holder_name,
+            subscription_active=chip.subscription_active,
+            subscription_month_name=chip.subscription_month_name,
+            subscription_free_entry_available_today=chip.subscription_free_entry_available_today,
+            current_hebrew_month_name=chip.current_hebrew_month_name,
         )
 
-    async def register(self, uid: str, holder_name: str | None = None) -> None:
-        self.registered.append((uid, holder_name))
+    async def mark_subscription_free_entry(self, chip_id: str) -> None:
+        for uid, chip in self.chips.items():
+            if chip.chip_id == chip_id:
+                self.chips[uid] = ChipValidation(
+                    chip_id=chip.chip_id,
+                    uid=chip.uid,
+                    is_enabled=chip.is_enabled,
+                    assigned_user_id=chip.assigned_user_id,
+                    balance_cents=self.balances[chip.chip_id],
+                    holder_name=chip.holder_name,
+                    subscription_active=chip.subscription_active,
+                    subscription_month_name=chip.subscription_month_name,
+                    subscription_free_entry_available_today=False,
+                    current_hebrew_month_name=chip.current_hebrew_month_name,
+                )
+                return
+        raise ValueError("chip_not_found")
+
+    async def register(
+        self, uid: str, holder_name: str | None = None, national_id: str | None = None
+    ) -> None:
+        self.registered.append((uid, holder_name, national_id))
         chip_id = chip_id_for(uid)
         self.chips[uid] = ChipValidation(
             chip_id=chip_id,
@@ -86,11 +110,35 @@ class FakeFingerprintsClient:
             assigned_user_id=None,
             balance_cents=0,
             holder_name=holder_name,
+            national_id=national_id,
         )
         self.balances[chip_id] = 0
 
-    async def rename(self, chip_id: str, holder_name: str | None) -> None:
-        self.renamed.append((chip_id, holder_name))
+    async def rename(
+        self,
+        chip_id: str,
+        holder_name: str | None,
+        *,
+        national_id: str | None = None,
+        set_national_id: bool = False,
+    ) -> None:
+        self.renamed.append((chip_id, holder_name, national_id if set_national_id else None))
+        for uid, chip in list(self.chips.items()):
+            if chip.chip_id == chip_id:
+                self.chips[uid] = ChipValidation(
+                    chip_id=chip.chip_id,
+                    uid=chip.uid,
+                    is_enabled=chip.is_enabled,
+                    assigned_user_id=chip.assigned_user_id,
+                    balance_cents=self.balances[chip.chip_id],
+                    holder_name=holder_name,
+                    national_id=national_id if set_national_id else chip.national_id,
+                    subscription_active=chip.subscription_active,
+                    subscription_month_name=chip.subscription_month_name,
+                    subscription_free_entry_available_today=chip.subscription_free_entry_available_today,
+                    current_hebrew_month_name=chip.current_hebrew_month_name,
+                )
+                return
 
     async def adjust_balance(
         self,
@@ -143,7 +191,17 @@ class Recorder:
         return self.events[-1]
 
 
-def chip(uid: str, *, balance_cents: int, is_enabled: bool = True, holder_name: str | None = "דנה") -> ChipValidation:
+def chip(
+    uid: str,
+    *,
+    balance_cents: int,
+    is_enabled: bool = True,
+    holder_name: str | None = "דנה",
+    subscription_active: bool = False,
+    subscription_free_entry_available_today: bool = False,
+    subscription_month_name: str | None = None,
+    current_hebrew_month_name: str | None = "אב",
+) -> ChipValidation:
     return ChipValidation(
         chip_id=chip_id_for(uid),
         uid=uid,
@@ -151,6 +209,10 @@ def chip(uid: str, *, balance_cents: int, is_enabled: bool = True, holder_name: 
         assigned_user_id=None,
         balance_cents=balance_cents,
         holder_name=holder_name,
+        subscription_active=subscription_active,
+        subscription_month_name=subscription_month_name,
+        subscription_free_entry_available_today=subscription_free_entry_available_today,
+        current_hebrew_month_name=current_hebrew_month_name,
     )
 
 
@@ -336,17 +398,20 @@ async def test_complete_enrollment_creates_named_chip_with_initial_balance():
     chip_client = FakeFingerprintsClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
-    session = enrollments.create(holder_name="דנה כהן", initial_amount_cents=5000)
+    session = enrollments.create(
+        holder_name="דנה כהן", national_id="123456782", initial_amount_cents=5000
+    )
 
     await complete_enrollment(
         session.session_id, 12, chip_client=chip_client, publish=publish, enrollments=enrollments
     )
 
-    assert chip_client.registered == [("FP-012", "דנה כהן")]
+    assert chip_client.registered == [("FP-012", "דנה כהן", "123456782")]
     assert chip_client.balances[chip_id_for("FP-012")] == 5000
     assert publish.types() == ["fingerprint.registered"]
     assert publish.last()["uid"] == "FP-012"
     assert publish.last()["balance_cents"] == 5000
+    assert publish.last()["national_id"] == "123456782"
 
 
 async def test_complete_enrollment_renames_when_sensor_reuses_slot():
@@ -354,15 +419,16 @@ async def test_complete_enrollment_renames_when_sensor_reuses_slot():
     chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=1200, holder_name="שם קודם")})
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
-    session = enrollments.create(holder_name="שם חדש")
+    session = enrollments.create(holder_name="שם חדש", national_id="123456782")
 
     await complete_enrollment(
         session.session_id, 2, chip_client=chip_client, publish=publish, enrollments=enrollments
     )
 
     assert chip_client.registered == []
-    assert chip_client.renamed == [(chip_id_for(uid), "שם חדש")]
+    assert chip_client.renamed == [(chip_id_for(uid), "שם חדש", "123456782")]
     assert publish.last()["balance_cents"] == 1200
+    assert publish.last()["national_id"] == "123456782"
 
 
 async def test_complete_enrollment_ignores_unknown_session():
@@ -380,10 +446,32 @@ async def test_complete_enrollment_ignores_unknown_session():
 
 def test_enrollment_session_is_consumed_once():
     enrollments = PendingEnrollmentStore()
-    session = enrollments.create(holder_name="דנה")
+    session = enrollments.create(holder_name="דנה", national_id="123456782")
 
     assert enrollments.pop(session.session_id) is not None
     assert enrollments.pop(session.session_id) is None
+
+
+async def test_complete_enrollment_fails_when_national_id_taken():
+    chip_client = FakeFingerprintsClient()
+
+    async def register_taken(
+        uid: str, holder_name: str | None = None, national_id: str | None = None
+    ) -> None:
+        raise ValueError("national_id_taken")
+
+    chip_client.register = register_taken  # type: ignore[method-assign]
+    publish = Recorder()
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(holder_name="דנה", national_id="123456782")
+
+    await complete_enrollment(
+        session.session_id, 5, chip_client=chip_client, publish=publish, enrollments=enrollments
+    )
+
+    assert publish.types() == ["fingerprint.enroll_progress"]
+    assert publish.last()["step"] == "failed"
+    assert publish.last()["reason"] == "national_id_taken"
 
 
 async def test_identify_mode_publishes_identified_without_pending():
@@ -493,3 +581,88 @@ async def test_identify_inactive_restores_entrance_pending():
 
     assert approval is not None
     assert publish.types() == ["access.pending"]
+
+
+async def test_subscription_free_entry_pending_with_zero_fee():
+    uid = slot_to_uid(8)
+    chip_client = FakeFingerprintsClient(
+        {
+            uid: chip(
+                uid,
+                balance_cents=0,
+                subscription_active=True,
+                subscription_free_entry_available_today=True,
+                subscription_month_name="אב",
+            )
+        }
+    )
+    publish = Recorder()
+    approvals = PendingApprovalStore(timeout_seconds=25)
+    approvals.set_publish(publish)
+    db = FakeDb()
+
+    approval = await process_fingerprint_scan(
+        8, db, chip_client=chip_client, publish=publish, approvals=approvals
+    )
+
+    assert approval is not None
+    assert approval.fee_cents == 0
+    assert publish.last()["fee_cents"] == 0
+    assert publish.last()["payment_method"] == "subscription"
+
+
+async def test_subscription_used_today_requires_balance():
+    uid = slot_to_uid(8)
+    chip_client = FakeFingerprintsClient(
+        {
+            uid: chip(
+                uid,
+                balance_cents=0,
+                subscription_active=True,
+                subscription_free_entry_available_today=False,
+            )
+        }
+    )
+    publish = Recorder()
+    approvals = PendingApprovalStore(timeout_seconds=25)
+    db = FakeDb()
+
+    approval = await process_fingerprint_scan(
+        8, db, chip_client=chip_client, publish=publish, approvals=approvals
+    )
+
+    assert approval is None
+    assert publish.types() == ["access.topup_needed"]
+
+
+async def test_identify_includes_subscription_fields():
+    uid = slot_to_uid(3)
+    chip_client = FakeFingerprintsClient(
+        {
+            uid: chip(
+                uid,
+                balance_cents=FEE,
+                subscription_active=True,
+                subscription_month_name="אב",
+                current_hebrew_month_name="אב",
+            )
+        }
+    )
+    publish = Recorder()
+    approvals = PendingApprovalStore(timeout_seconds=25)
+    identify = TopupIdentifyStore()
+    await identify.start()
+    db = FakeDb()
+
+    await process_fingerprint_scan(
+        3,
+        db,
+        chip_client=chip_client,
+        publish=publish,
+        approvals=approvals,
+        identify=identify,
+    )
+
+    assert publish.last()["subscription_active"] is True
+    assert publish.last()["subscription_month_name"] == "אב"
+    assert publish.last()["current_hebrew_month_name"] == "אב"

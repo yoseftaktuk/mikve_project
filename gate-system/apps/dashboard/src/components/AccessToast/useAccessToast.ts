@@ -1,12 +1,12 @@
 import { useMemo } from 'react'
-import styles from './ChipToast.module.css'
-import type { ChipToastData } from './types'
+import styles from './AccessToast.module.css'
+import type { AccessToastData } from './types'
 
-type UseChipToastParams = {
-  toast: ChipToastData
+type UseAccessToastParams = {
+  toast: AccessToastData
 }
 
-export function useChipToast({ toast }: UseChipToastParams) {
+export function useAccessToast({ toast }: UseAccessToastParams) {
   const isGranted = toast.kind === 'granted'
 
   const overlayClassName = useMemo(
@@ -20,7 +20,7 @@ export function useChipToast({ toast }: UseChipToastParams) {
   )
 
   const icon = isGranted ? '✓' : '✕'
-  const defaultBalanceLabel = "יתרה נותרת בצ'יפ"
+  const defaultBalanceLabel = 'יתרה נותרת'
 
   return {
     isGranted,

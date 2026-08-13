@@ -1,4 +1,4 @@
-export type ChipToastData = {
+export type AccessToastData = {
   kind: 'granted' | 'denied'
   title: string
   message: string

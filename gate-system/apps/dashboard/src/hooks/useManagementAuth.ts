@@ -1,13 +1,43 @@
-import { useCallback, useState } from 'react'
-import { managementApi } from '../app/managementApi'
-import { clearManagementToken, getManagementToken, setManagementToken } from '../app/managementStorage'
+import { useCallback, useEffect, useState } from 'react'
+import { managementApi, setManagementUnauthorizedHandler } from '../app/managementApi'
+import type { ManagementAuthResponse } from '../types/managementAuth'
 
 /** PIN login state shared by every management-protected screen. */
 export function useManagementAuth() {
-  const [authenticated, setAuthenticated] = useState(() => Boolean(getManagementToken()))
+  const [authenticated, setAuthenticated] = useState(false)
+  const [authChecking, setAuthChecking] = useState(true)
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState<string | null>(null)
   const [pinLoading, setPinLoading] = useState(false)
+
+  useEffect(() => {
+    setManagementUnauthorizedHandler(() => setAuthenticated(false))
+    return () => setManagementUnauthorizedHandler(null)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const checkSession = async () => {
+      try {
+        const res = await managementApi.get<ManagementAuthResponse>('/access/management/session')
+        if (!cancelled) {
+          setAuthenticated(res.data.authenticated)
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthenticated(false)
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthChecking(false)
+        }
+      }
+    }
+    void checkSession()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const onPinSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -15,9 +45,8 @@ export function useManagementAuth() {
       setPinLoading(true)
       setPinError(null)
       try {
-        const res = await managementApi.post<{ token: string }>('/access/management/auth', { pin })
-        setManagementToken(res.data.token)
-        setAuthenticated(true)
+        const res = await managementApi.post<ManagementAuthResponse>('/access/management/auth', { pin })
+        setAuthenticated(res.data.authenticated)
         setPin('')
       } catch {
         setPinError('קוד שגוי. נסה שוב.')
@@ -28,10 +57,15 @@ export function useManagementAuth() {
     [pin],
   )
 
-  const logout = useCallback(() => {
-    clearManagementToken()
-    setAuthenticated(false)
+  const logout = useCallback(async () => {
+    try {
+      await managementApi.post<ManagementAuthResponse>('/access/management/logout')
+    } catch {
+      // Cookie/session may already be gone; still clear local auth state.
+    } finally {
+      setAuthenticated(false)
+    }
   }, [])
 
-  return { authenticated, pin, setPin, pinError, pinLoading, onPinSubmit, logout }
+  return { authenticated, authChecking, pin, setPin, pinError, pinLoading, onPinSubmit, logout }
 }

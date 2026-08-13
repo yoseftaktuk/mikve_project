@@ -1,7 +1,7 @@
 import { usePageMeta } from '../../../app/pageMeta'
 import { AccessApprovalDialog } from '../../../components/AccessApprovalDialog'
+import { AccessToast } from '../../../components/AccessToast'
 import { CardTopupDialog } from '../../../components/CardTopupDialog'
-import { ChipToast } from '../../../components/ChipToast'
 import { GateEntrancePanel } from '../../../components/GateEntrancePanel'
 import { PageShell } from '../../../components/PageShell'
 import { TopupChoiceDialog } from '../../../components/TopupChoiceDialog'
@@ -12,14 +12,14 @@ import { useDashboardPage } from './useDashboardPage'
 export function DashboardPage() {
   usePageMeta({
     title: 'שער כניסה',
-    subtitle: 'בחר איך להיכנס — טביעת אצבע או מזומן',
+    subtitle: 'בחר שיטת כניסה',
     titleInContent: true,
     showLiveStatus: true,
   })
 
   const {
     gateStatus,
-    chipToast,
+    accessToast,
     lastActivity,
     simError,
     simLoading,
@@ -31,7 +31,7 @@ export function DashboardPage() {
     approvalError,
     topupOffer,
     cardTopupOpen,
-    dismissChipToast,
+    dismissAccessToast,
     simulateSlotFromInput,
     simulateUnmatched,
     simulateCash,
@@ -71,15 +71,15 @@ export function DashboardPage() {
 
       {topupOffer && cardTopupOpen && (
         <CardTopupDialog
-          chipUid={topupOffer.uid}
+          fingerprintUid={topupOffer.uid}
           formatMoney={formatMoney}
           onClose={dismissTopupOffer}
           onPaid={onCardTopupPaid}
         />
       )}
 
-      {!blockingDialog && chipToast && (
-        <ChipToast toast={chipToast} formatMoney={formatMoney} onDismiss={dismissChipToast} />
+      {!blockingDialog && accessToast && (
+        <AccessToast toast={accessToast} formatMoney={formatMoney} onDismiss={dismissAccessToast} />
       )}
 
       <PageShell variant="default">

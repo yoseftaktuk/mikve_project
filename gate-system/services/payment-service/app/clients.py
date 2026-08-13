@@ -8,6 +8,17 @@ from .settings import settings
 
 
 @dataclass(frozen=True)
+class ChipNationalIdMatch:
+    """Ledger chip resolved from a Nedarim Zeout / national ID lookup."""
+
+    chip_id: str
+    uid: str
+    is_enabled: bool
+    balance_cents: int
+    national_id: str | None = None
+
+
+@dataclass(frozen=True)
 class ChipValidation:
     """Ledger details returned by the fingerprints-service validate endpoint."""
 
@@ -16,6 +27,10 @@ class ChipValidation:
     is_enabled: bool
     balance_cents: int
     holder_name: str | None = None
+    subscription_active: bool = False
+    subscription_month_name: str | None = None
+    subscription_free_entry_available_today: bool = False
+    current_hebrew_month_name: str | None = None
 
 
 class FingerprintsClient:
@@ -23,6 +38,27 @@ class FingerprintsClient:
 
     def __init__(self) -> None:
         self._base = settings.fingerprints_service_url.rstrip("/")
+
+    async def lookup_by_national_id(self, national_id: str) -> ChipNationalIdMatch:
+        """Resolve exactly one chip by national ID. Raises if none or ambiguous."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                f"{self._base}/fingerprints/lookup-by-national-id",
+                json={"national_id": national_id},
+            )
+        if resp.status_code == 404:
+            raise ValueError("chip_not_found")
+        if resp.status_code == 409:
+            raise ValueError("national_id_ambiguous")
+        resp.raise_for_status()
+        data = resp.json()
+        return ChipNationalIdMatch(
+            chip_id=str(data["chip_id"]),
+            uid=data["uid"],
+            is_enabled=bool(data["is_enabled"]),
+            balance_cents=int(data["balance_cents"]),
+            national_id=data.get("national_id"),
+        )
 
     async def validate(self, uid: str) -> ChipValidation:
         """Fetch ledger status and balance by UID."""
@@ -38,6 +74,12 @@ class FingerprintsClient:
             is_enabled=bool(data["is_enabled"]),
             balance_cents=int(data["balance_cents"]),
             holder_name=data.get("holder_name"),
+            subscription_active=bool(data.get("subscription_active")),
+            subscription_month_name=data.get("subscription_month_name"),
+            subscription_free_entry_available_today=bool(
+                data.get("subscription_free_entry_available_today")
+            ),
+            current_hebrew_month_name=data.get("current_hebrew_month_name"),
         )
 
     async def adjust_balance(
@@ -64,3 +106,37 @@ class FingerprintsClient:
             raise ValueError("balance_not_found")
         resp.raise_for_status()
         return int(resp.json()["amount_cents"])
+
+    async def activate_subscription(
+        self,
+        chip_id: str,
+        *,
+        amount_cents: int,
+        nedarim_transaction_id: str,
+        hebrew_year: int,
+        hebrew_month: int,
+        hebrew_month_name: str,
+    ) -> int:
+        """Activate a monthly subscription; return current balance_cents for status display."""
+        body = {
+            "amount_cents": amount_cents,
+            "nedarim_transaction_id": nedarim_transaction_id,
+            "hebrew_year": hebrew_year,
+            "hebrew_month": hebrew_month,
+            "hebrew_month_name": hebrew_month_name,
+        }
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                f"{self._base}/fingerprints/{chip_id}/subscriptions/activate", json=body
+            )
+            if resp.status_code == 409:
+                detail = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                code = detail.get("code") if isinstance(detail, dict) else None
+                raise ValueError(code or "subscription_already_active")
+            if resp.status_code == 404:
+                raise ValueError("chip_not_found")
+            resp.raise_for_status()
+            bal = await client.get(f"{self._base}/fingerprints/{chip_id}/balance")
+            if bal.status_code == 200:
+                return int(bal.json()["amount_cents"])
+        return 0

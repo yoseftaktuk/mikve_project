@@ -25,6 +25,7 @@ from .schemas import (
     ChargeChipRequest,
     ChargeChipResponse,
 )
+from .hebrew_calendar import current_hebrew_month
 from .settings import settings
 from .topup_logic import (
     abandon_card_topup,
@@ -33,6 +34,7 @@ from .topup_logic import (
     process_nedarim_callback,
     simulate_mock_card_payment,
 )
+from .webhook_logic import process_nedarim_webhook, webhook_allows_local_bypass
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,35 @@ async def startup() -> None:
     async with engine.begin() as conn:
         await conn.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {settings.postgres_schema}")
         await conn.run_sync(Base.metadata.create_all)
+        # Existing volumes may still have chip_uid from before the rename.
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'card_topups'
+                  AND column_name = 'chip_uid'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'card_topups'
+                  AND column_name = 'fingerprint_uid'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.card_topups RENAME COLUMN chip_uid TO fingerprint_uid';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.card_topups "
+            "ADD COLUMN IF NOT EXISTS product varchar(32) NOT NULL DEFAULT 'balance'"
+        )
+        await conn.exec_driver_sql(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS nedarim_webhook_events_transaction_id_key "
+            f"ON {settings.postgres_schema}.nedarim_webhook_events (transaction_id)"
+        )
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     payment_provider = build_payment_provider()
     logger.info(
@@ -97,6 +128,7 @@ async def healthz(db: AsyncSession = Depends(get_db)):
     crediting = await db.scalar(
         select(func.count()).select_from(CardTopup).where(CardTopup.status == STATUS_CREDITING)
     )
+    hebrew = current_hebrew_month()
     return {
         "status": "ok",
         "service": settings.service_name,
@@ -104,17 +136,35 @@ async def healthz(db: AsyncSession = Depends(get_db)):
         "nedarim_configured": payment_provider.is_configured,
         "public_base_url_set": bool(settings.public_base_url),
         "topup_amounts_cents": list(settings.topup_amount_options_cents),
+        "subscription_price_cents": settings.subscription_price_cents,
+        "current_hebrew_month_name": hebrew.name,
         "pending_topups": int(pending or 0),
         "crediting_topups": int(crediting or 0),
     }
+
+
+def _status_response(topup: CardTopup) -> CardTopupStatusResponse:
+    return CardTopupStatusResponse(
+        topup_id=topup.id,
+        status=topup.status,
+        amount_cents=topup.amount_cents,
+        fingerprint_uid=topup.fingerprint_uid,
+        chip_id=topup.chip_id,
+        product=topup.product or "balance",
+        nedarim_transaction_id=topup.nedarim_created_id or topup.nedarim_transaction_id,
+        balance_after_cents=topup.balance_after_cents,
+        last_num=topup.last_num,
+        error_code=topup.error_code,
+    )
 
 
 @app.post("/card-topups", response_model=CardTopupCreateResponse)
 async def card_topups_create(req: CardTopupCreateRequest, db: AsyncSession = Depends(get_db)):
     """Open a pending card top-up and create the Nedarim transaction server-side."""
     created = await create_card_topup(
-        chip_uid=req.chip_uid,
+        fingerprint_uid=req.fingerprint_uid,
         amount_cents=req.amount_cents,
+        product=req.product,
         db=db,
         chip_client=chip_client,
         payment_provider=payment_provider,
@@ -124,8 +174,9 @@ async def card_topups_create(req: CardTopupCreateRequest, db: AsyncSession = Dep
         nedarim_transaction_id=created.nedarim_transaction_id,
         iframe_url=created.iframe_url,
         amount_cents=created.amount_cents,
-        chip_uid=created.chip_uid,
+        fingerprint_uid=created.fingerprint_uid,
         chip_id=created.chip_id,
+        product=created.product,
     )
 
 
@@ -133,34 +184,14 @@ async def card_topups_create(req: CardTopupCreateRequest, db: AsyncSession = Dep
 async def card_topups_status(topup_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Return the server-confirmed status. The only thing the kiosk may trust."""
     topup = await get_card_topup(topup_id, db)
-    return CardTopupStatusResponse(
-        topup_id=topup.id,
-        status=topup.status,
-        amount_cents=topup.amount_cents,
-        chip_uid=topup.chip_uid,
-        chip_id=topup.chip_id,
-        nedarim_transaction_id=topup.nedarim_created_id or topup.nedarim_transaction_id,
-        balance_after_cents=topup.balance_after_cents,
-        last_num=topup.last_num,
-        error_code=topup.error_code,
-    )
+    return _status_response(topup)
 
 
 @app.post("/card-topups/{topup_id}/abandon", response_model=CardTopupStatusResponse)
 async def card_topups_abandon(topup_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Mark a still-pending top-up abandoned when the user cancels."""
     topup = await abandon_card_topup(topup_id, db)
-    return CardTopupStatusResponse(
-        topup_id=topup.id,
-        status=topup.status,
-        amount_cents=topup.amount_cents,
-        chip_uid=topup.chip_uid,
-        chip_id=topup.chip_id,
-        nedarim_transaction_id=topup.nedarim_created_id or topup.nedarim_transaction_id,
-        balance_after_cents=topup.balance_after_cents,
-        last_num=topup.last_num,
-        error_code=topup.error_code,
-    )
+    return _status_response(topup)
 
 
 async def _publish_payment_event(event: dict[str, Any]) -> None:
@@ -233,6 +264,55 @@ async def nedarim_callback(
         db=db,
         chip_client=chip_client,
         publish=_publish_payment_event,
+    )
+    return JSONResponse(
+        status_code=result.http_status,
+        content={
+            "status": "ok" if result.accepted else "error",
+            "code": result.code,
+            "message": result.message,
+        },
+    )
+
+
+@app.post("/nedarim/webhook")
+async def nedarim_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Institution-level Nedarim webhook. Identifies the chip by Zeout only."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "code": "bad_json", "message": "Body must be JSON"},
+        )
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "code": "bad_payload", "message": "Body must be a JSON object"},
+        )
+
+    allow_local = webhook_allows_local_bypass()
+    if (
+        settings.nedarim_require_cloudflare
+        and not allow_local
+        and not request.headers.get("cf-connecting-ip")
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "status": "error",
+                "code": "missing_cf",
+                "message": "Callback must arrive through Cloudflare Tunnel",
+            },
+        )
+
+    source_ip = resolve_callback_source_ip(request)
+    result = await process_nedarim_webhook(
+        payload=payload,
+        source_ip=source_ip,
+        db=db,
+        chip_client=chip_client,
+        skip_source_ip=allow_local,
     )
     return JSONResponse(
         status_code=result.http_status,

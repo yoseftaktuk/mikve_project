@@ -17,7 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gate_shared.errors import AppError
 
 from .clients import FingerprintsClient
+from .hebrew_calendar import current_hebrew_month
 from .models import (
+    PRODUCT_BALANCE,
+    PRODUCT_MONTHLY_SUBSCRIPTION,
     STATUS_ABANDONED,
     STATUS_CREDITING,
     STATUS_FAILED,
@@ -50,11 +53,33 @@ class CreatedCardTopup:
     nedarim_transaction_id: str
     iframe_url: str
     amount_cents: int
-    chip_uid: str
+    fingerprint_uid: str
     chip_id: uuid.UUID
+    product: str
 
 
-def _require_allowed_amount(amount_cents: int) -> None:
+def _normalize_product(product: str | None) -> str:
+    value = (product or PRODUCT_BALANCE).strip().lower()
+    if value not in (PRODUCT_BALANCE, PRODUCT_MONTHLY_SUBSCRIPTION):
+        raise AppError(
+            code="invalid_product",
+            message=f"product must be {PRODUCT_BALANCE!r} or {PRODUCT_MONTHLY_SUBSCRIPTION!r}",
+            http_status=400,
+        )
+    return value
+
+
+def _require_allowed_amount(amount_cents: int, *, product: str) -> None:
+    if product == PRODUCT_MONTHLY_SUBSCRIPTION:
+        expected = settings.subscription_price_cents
+        if amount_cents != expected:
+            raise AppError(
+                code="invalid_amount",
+                message=f"Subscription amount must be {expected} agorot",
+                http_status=400,
+                details={"subscription_price_cents": expected},
+            )
+        return
     allowed = settings.topup_amount_options_cents
     if amount_cents not in allowed:
         raise AppError(
@@ -84,18 +109,20 @@ def _new_ajax_id() -> str:
 
 async def create_card_topup(
     *,
-    chip_uid: str,
+    fingerprint_uid: str,
     amount_cents: int,
     db: AsyncSession,
     chip_client: FingerprintsClient,
     payment_provider: PaymentProvider,
+    product: str = PRODUCT_BALANCE,
 ) -> CreatedCardTopup:
     """Resolve the chip, open a pending top-up, and create the Nedarim transaction.
 
     The amount is fixed on this server before the iframe is shown, so the kiosk
     cannot alter what the cardholder is charged.
     """
-    _require_allowed_amount(amount_cents)
+    product = _normalize_product(product)
+    _require_allowed_amount(amount_cents, product=product)
     if settings.payment_mode != "mock" and not settings.public_base_url.strip():
         raise AppError(
             code="public_base_url_missing",
@@ -103,9 +130,9 @@ async def create_card_topup(
             http_status=503,
         )
 
-    uid = chip_uid.strip()
+    uid = fingerprint_uid.strip()
     if not uid:
-        raise AppError(code="invalid_chip_uid", message="chip_uid is required", http_status=400)
+        raise AppError(code="invalid_fingerprint_uid", message="fingerprint_uid is required", http_status=400)
 
     try:
         chip = await chip_client.validate(uid)
@@ -115,11 +142,21 @@ async def create_card_topup(
     if not chip.is_enabled:
         raise AppError(code="chip_disabled", message="Chip is disabled", http_status=409)
 
+    hebrew = current_hebrew_month()
+    if product == PRODUCT_MONTHLY_SUBSCRIPTION and chip.subscription_active:
+        raise AppError(
+            code="subscription_already_active",
+            message="Chip already has an active subscription for this Hebrew month",
+            http_status=409,
+            details={"hebrew_month_name": chip.subscription_month_name or hebrew.name},
+        )
+
     topup = CardTopup(
         id=uuid.uuid4(),
         chip_id=uuid.UUID(chip.chip_id),
-        chip_uid=chip.uid,
+        fingerprint_uid=chip.uid,
         amount_cents=amount_cents,
+        product=product,
         status=STATUS_PENDING,
         ajax_id=_new_ajax_id(),
     )
@@ -131,12 +168,16 @@ async def create_card_topup(
         if settings.payment_mode != "mock"
         else f"mock://local/card-topups/{topup.id}"
     )
+    if product == PRODUCT_MONTHLY_SUBSCRIPTION:
+        comment = f"gate monthly subscription {chip.uid} {hebrew.name}"
+    else:
+        comment = f"gate top-up {chip.uid}"
     command = CreateTransactionCommand(
         amount_cents=amount_cents,
         callback_url=callback_url,
         ajax_id=topup.ajax_id,
         param1=str(topup.id),
-        comment=f"gate top-up {chip.uid}",
+        comment=comment,
         groupe=settings.nedarim_groupe,
     )
 
@@ -159,9 +200,10 @@ async def create_card_topup(
     await db.refresh(topup)
 
     logger.info(
-        "card_topup_created topup_id=%s chip_uid=%s amount_cents=%s nedarim_id=%s",
+        "card_topup_created topup_id=%s product=%s fingerprint_uid=%s amount_cents=%s nedarim_id=%s",
         topup.id,
-        topup.chip_uid,
+        topup.product,
+        topup.fingerprint_uid,
         topup.amount_cents,
         topup.nedarim_created_id,
     )
@@ -170,8 +212,9 @@ async def create_card_topup(
         nedarim_transaction_id=result.transaction_id,
         iframe_url=payment_provider.iframe_url,
         amount_cents=topup.amount_cents,
-        chip_uid=topup.chip_uid,
+        fingerprint_uid=topup.fingerprint_uid,
         chip_id=topup.chip_id,
+        product=topup.product,
     )
 
 
@@ -310,14 +353,33 @@ async def _credit_and_settle(
     last_num: str | None,
     publish: PublishFn | None,
 ) -> int:
-    """Credit the chip (idempotent) and mark the top-up paid."""
-    balance_after = await chip_client.adjust_balance(
-        chip_id=str(topup.chip_id),
-        delta_cents=topup.amount_cents,
-        reason="card_topup",
-        description=f"Nedarim Plus top-up {transaction_id}",
-        idempotency_key=f"nedarim:{transaction_id}",
-    )
+    """Credit balance or activate subscription (idempotent) and mark the top-up paid."""
+    product = topup.product or PRODUCT_BALANCE
+    if product == PRODUCT_MONTHLY_SUBSCRIPTION:
+        hebrew = current_hebrew_month()
+        try:
+            balance_after = await chip_client.activate_subscription(
+                str(topup.chip_id),
+                amount_cents=topup.amount_cents,
+                nedarim_transaction_id=transaction_id,
+                hebrew_year=hebrew.year,
+                hebrew_month=hebrew.month,
+                hebrew_month_name=hebrew.name,
+            )
+        except ValueError as exc:
+            code = str(exc) or "subscription_activate_failed"
+            raise AppError(code=code, message="Could not activate monthly subscription", http_status=502) from None
+        event_type = "subscription.paid"
+    else:
+        balance_after = await chip_client.adjust_balance(
+            chip_id=str(topup.chip_id),
+            delta_cents=topup.amount_cents,
+            reason="card_topup",
+            description=f"Nedarim Plus top-up {transaction_id}",
+            idempotency_key=f"nedarim:{transaction_id}",
+        )
+        event_type = "card_topup.paid"
+
     topup.status = STATUS_PAID
     topup.nedarim_transaction_id = transaction_id
     topup.confirmation = confirmation
@@ -342,10 +404,11 @@ async def _credit_and_settle(
     if publish is not None:
         await publish(
             {
-                "type": "card_topup.paid",
+                "type": event_type,
                 "topup_id": str(topup.id),
                 "chip_id": str(topup.chip_id),
-                "chip_uid": topup.chip_uid,
+                "fingerprint_uid": topup.fingerprint_uid,
+                "product": product,
                 "amount_cents": topup.amount_cents,
                 "balance_after_cents": balance_after,
                 "nedarim_transaction_id": transaction_id,
@@ -429,20 +492,15 @@ async def process_nedarim_callback(
             message=exc.message,
         )
 
+    # CreateTransaction returns an iframe/session id; the CallBack often reports a
+    # different cleared TransactionId (observed live: create 1766827 → callback 76030570).
+    # Association is the URL topup_id + Param1 + amount + source IP — not this equality.
     if topup.nedarim_created_id and parsed.transaction_id != topup.nedarim_created_id:
-        await _write_callback_audit(
-            db,
-            topup_id=topup.id,
-            source_ip=source_ip,
-            accepted=False,
-            rejection_reason="id_mismatch",
-            payload=payload,
-        )
-        return CallbackHandlingResult(
-            accepted=False,
-            http_status=400,
-            code="id_mismatch",
-            message="Callback transaction id does not match the created transaction",
+        logger.info(
+            "nedarim_id_differs topup_id=%s created_id=%s callback_id=%s",
+            topup.id,
+            topup.nedarim_created_id,
+            parsed.transaction_id,
         )
 
     if topup.status == STATUS_PAID:
@@ -558,9 +616,9 @@ async def process_nedarim_callback(
         payload=payload,
     )
     logger.info(
-        "card_topup_paid topup_id=%s chip_uid=%s amount_cents=%s balance_after=%s nedarim_id=%s",
+        "card_topup_paid topup_id=%s fingerprint_uid=%s amount_cents=%s balance_after=%s nedarim_id=%s",
         topup.id,
-        topup.chip_uid,
+        topup.fingerprint_uid,
         topup.amount_cents,
         balance_after,
         parsed.transaction_id,
