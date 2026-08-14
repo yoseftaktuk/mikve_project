@@ -57,7 +57,7 @@ class ChipInfoResponse(BaseModel):
 
 
 class ManagementUserResponse(BaseModel):
-    chip_id: str
+    fingerprint_id: str
     uid: str
     holder_name: str | None = None
     national_id: str | None = None
@@ -236,7 +236,7 @@ async def list_users(chip_client: FingerprintsClient) -> list[ManagementUserResp
     users = await chip_client.list_users()
     return [
         ManagementUserResponse(
-            chip_id=u.chip_id,
+            fingerprint_id=u.chip_id,
             uid=u.uid,
             holder_name=u.holder_name,
             national_id=u.national_id,
@@ -316,7 +316,7 @@ async def update_user(
             balance_cents = target
 
     return ManagementUserResponse(
-        chip_id=user.chip_id,
+        fingerprint_id=user.chip_id,
         uid=user.uid,
         holder_name=user.holder_name,
         national_id=user.national_id,

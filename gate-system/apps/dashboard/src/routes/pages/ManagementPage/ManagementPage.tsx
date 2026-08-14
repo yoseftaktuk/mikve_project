@@ -108,9 +108,9 @@ export function ManagementPage() {
 
         <ul className={styles.userList}>
           {users.users.map((user) => {
-            const isEditing = users.editingId === user.chip_id
+            const isEditing = users.editingId === user.fingerprint_id
             return (
-              <li key={user.chip_id} className={styles.userRow}>
+              <li key={user.fingerprint_id} className={styles.userRow}>
                 {isEditing ? (
                   <div className={styles.editForm}>
                     <label className={styles.formField}>

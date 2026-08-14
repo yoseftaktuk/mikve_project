@@ -1,0 +1,1 @@
+{"sessionId":"cf2840","runId":"pre-fix","hypothesisId":"D","location":"useDashboardPage.ts:simulateChip","message":"simulate_chip_response","data":{"granted":false,"reason":"insufficient_balance","fee_cents":1500,"balance_after_cents":1000,"chip_id":"3426c257-25a5-4509-a0d1-682e0e5ce7a3"},"timestamp":1786006565939}

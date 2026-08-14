@@ -55,7 +55,7 @@ export function useManagementUsers(authenticated: boolean) {
   const visibleUsers = authenticated ? users : []
 
   const startEdit = useCallback((user: ManagementUser) => {
-    setEditingId(user.chip_id)
+    setEditingId(user.fingerprint_id)
     setEditName(user.holder_name ?? '')
     setEditNationalId(user.national_id ?? '')
     setEditEnabled(user.is_enabled)
@@ -103,7 +103,7 @@ export function useManagementUsers(authenticated: boolean) {
         `/access/management/users/${encodeURIComponent(editingId)}`,
         body,
       )
-      setUsers((prev) => prev.map((u) => (u.chip_id === editingId ? res.data : u)))
+      setUsers((prev) => prev.map((u) => (u.fingerprint_id === editingId ? res.data : u)))
       setEditingId(null)
       setSuccess('הרשום עודכן.')
     } catch (err: unknown) {
@@ -131,9 +131,9 @@ export function useManagementUsers(authenticated: boolean) {
     setError(null)
     setSuccess(null)
     try {
-      await managementApi.delete(`/access/management/users/${encodeURIComponent(user.chip_id)}`)
-      setUsers((prev) => prev.filter((u) => u.chip_id !== user.chip_id))
-      if (editingId === user.chip_id) setEditingId(null)
+      await managementApi.delete(`/access/management/users/${encodeURIComponent(user.fingerprint_id)}`)
+      setUsers((prev) => prev.filter((u) => u.fingerprint_id !== user.fingerprint_id))
+      if (editingId === user.fingerprint_id) setEditingId(null)
       setSuccess('הרשום נמחק.')
     } catch {
       setError('מחיקת הרשום נכשלה.')

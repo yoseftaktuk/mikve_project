@@ -1,5 +1,5 @@
 export type ManagementUser = {
-  chip_id: string
+  fingerprint_id: string
   uid: string
   holder_name: string | null
   national_id?: string | null
