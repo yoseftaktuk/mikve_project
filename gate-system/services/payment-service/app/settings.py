@@ -38,8 +38,19 @@ class Settings(CommonSettings):
     # Comparison is not stripped.
     nedarim_target_group: str = Field(default="מנוי מקווה חודש", alias="NEDARIM_TARGET_GROUP")
 
-    # Exact Nedarim Groupe that credits ledger balance. Comparison is not stripped.
-    nedarim_balance_group: str = Field(default="ערך צבור למקווה", alias="NEDARIM_BALANCE_GROUP")
+    # Exact Nedarim Groupe names that credit ledger balance. Comma-separated.
+    # Comparison is not stripped (no trim / fuzzy match).
+    nedarim_balance_group: str = Field(
+        default="ערך צבור למקווה",
+        alias="NEDARIM_BALANCE_GROUP",
+    )
+
+    # Exact Nedarim Groupe names that must never credit or activate.
+    # Comma-separated. Comparison is not stripped. Deny wins over allow lists.
+    nedarim_not_allowed_group: str = Field(
+        default="תרומה לבית הכנסת",
+        alias="NEDARIM_NOT_ALLOWED_GROUP",
+    )
 
     # Skip IP + Cloudflare checks on POST /nedarim/webhook only. Ignored when
     # ENVIRONMENT=production so a mis-set flag cannot open the production path.
@@ -52,6 +63,16 @@ class Settings(CommonSettings):
     def topup_amount_options_cents(self) -> tuple[int, ...]:
         """Amounts the kiosk may ask for. Anything else never reaches Nedarim."""
         return tuple(int(part) for part in self.topup_amounts_cents.split(",") if part.strip())
+
+    @property
+    def nedarim_balance_groups(self) -> frozenset[str]:
+        """Exact Groupe names that credit ledger balance. Empty segments dropped, not stripped."""
+        return frozenset(part for part in self.nedarim_balance_group.split(",") if part)
+
+    @property
+    def nedarim_not_allowed_groups(self) -> frozenset[str]:
+        """Exact Groupe names that must never credit or activate. Empty segments dropped, not stripped."""
+        return frozenset(part for part in self.nedarim_not_allowed_group.split(",") if part)
 
 
 settings = Settings()

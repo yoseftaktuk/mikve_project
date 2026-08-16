@@ -294,19 +294,28 @@ class AccessOrchestrator:
 
         if fee == 0:
             try:
-                await self._chip.mark_subscription_free_entry(chip_id)
-            except ValueError:
-                await self._fail_never_charged(repo, attempt, "subscription_inactive")
+                await self._chip.mark_subscription_free_entry(
+                    chip_id, idempotency_key=str(attempt.id)
+                )
+            except ValueError as exc:
+                reason = str(exc) if str(exc) in {"subscription_inactive", "daily_limit_reached"} else "subscription_inactive"
+                logger.info(
+                    "subscription_free_entry_denied attempt_id=%s chip_id=%s reason=%s",
+                    attempt.id,
+                    chip_id,
+                    reason,
+                )
+                await self._fail_never_charged(repo, attempt, reason)
                 await self._legacy_deny(
-                    db, uid=uid, chip_id=chip_id, reason="subscription_inactive", fee=fee, before=before
+                    db, uid=uid, chip_id=chip_id, reason=reason, fee=fee, before=before
                 )
                 await db.commit()
                 await self._publish_denied(
-                    uid=uid, chip_id=chip_id, reason="subscription_inactive", fee=fee, balance=before
+                    uid=uid, chip_id=chip_id, reason=reason, fee=fee, balance=before
                 )
                 return AccessDecisionResponse(
                     granted=False,
-                    reason="subscription_inactive",
+                    reason=reason,
                     chip_id=chip_id,
                     fee_cents=fee,
                     balance_before_cents=before,

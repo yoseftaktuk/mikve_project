@@ -117,7 +117,7 @@ export default defineConfig({
   server: {
     host: true,
     // Quick Tunnel Host headers are *.trycloudflare.com; Vite blocks them by default.
-    allowedHosts: ['.trycloudflare.com'],
+    allowedHosts: ['.trycloudflare.com', 'poaleyzedek.net'],
     port: Number(process.env.VITE_DEV_PORT ?? 5173),
     // Docker Desktop file events are unreliable without polling.
     watch: {

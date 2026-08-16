@@ -573,7 +573,8 @@ Exact `Groupe` match (no trim):
 | Groupe | Action |
 |--------|--------|
 | `NEDARIM_TARGET_GROUP` (default `מנוי מקווה חודש`) | Activate a Hebrew-month subscription. Balance unchanged. |
-| `NEDARIM_BALANCE_GROUP` (default `ערך צבור למקווה`) | Credit chip ledger balance by `Amount`. No subscription. |
+| `NEDARIM_BALANCE_GROUP` (comma-separated; default `ערך צבור למקווה`) | Credit chip ledger balance by `Amount`. No subscription. |
+| `NEDARIM_NOT_ALLOWED_GROUP` (comma-separated; default `תרומה לבית הכנסת`) | Store as `ignored_category` and do not credit. Deny wins over the allow lists. |
 
 Public URL (nginx prefix `/api/payments/`):
 
@@ -589,7 +590,7 @@ Shared conditions for both categories:
 
 1. Request passed source checks (Nedarim IPs `18.196.146.117` / `18.194.219.73`, plus `CF-Connecting-IP` when `NEDARIM_REQUIRE_CLOUDFLARE=true`)
 2. `TransactionId` is present and has not already been processed (unique DB constraint)
-3. `Groupe` equals `NEDARIM_TARGET_GROUP` or `NEDARIM_BALANCE_GROUP` **exactly**
+3. `Groupe` equals `NEDARIM_TARGET_GROUP` or one of the `NEDARIM_BALANCE_GROUP` names **exactly**, and is not in `NEDARIM_NOT_ALLOWED_GROUP`
 4. `Zeout` normalizes to a 9-digit national ID that matches exactly one chip
 5. `Amount` is a positive shekel amount (stored as agorot; no floats)
 6. `Currency` is `1` (ILS). `2` (USD) is recorded as invalid and is not credited

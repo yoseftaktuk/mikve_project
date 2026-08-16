@@ -80,7 +80,9 @@ class FakeFingerprintsClient:
             current_hebrew_month_name=chip.current_hebrew_month_name,
         )
 
-    async def mark_subscription_free_entry(self, chip_id: str) -> None:
+    async def mark_subscription_free_entry(
+        self, chip_id: str, *, idempotency_key: str | None = None
+    ) -> None:
         for uid, chip in self.chips.items():
             if chip.chip_id == chip_id:
                 self.chips[uid] = ChipValidation(

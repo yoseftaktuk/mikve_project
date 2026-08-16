@@ -26,6 +26,7 @@ from .schemas import (
     ChipUpdateRequest,
     LookupByNationalIdRequest,
     LookupByNationalIdResponse,
+    MarkFreeEntryRequest,
     SubscriptionResponse,
     ValidateChipRequest,
     ValidateChipResponse,
@@ -458,9 +459,17 @@ async def subscriptions_activate(
 
 
 @app.post("/fingerprints/{chip_id}/subscriptions/mark-free-entry", response_model=SubscriptionResponse)
-async def subscriptions_mark_free_entry(chip_id: str, db: AsyncSession = Depends(get_db)):
+async def subscriptions_mark_free_entry(
+    chip_id: str,
+    req: MarkFreeEntryRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Mark today's free subscription entrance as used."""
-    row = await mark_free_entry(db, chip_id=uuid.UUID(chip_id))
+    row = await mark_free_entry(
+        db,
+        chip_id=uuid.UUID(chip_id),
+        idempotency_key=req.idempotency_key if req else None,
+    )
     snap = await subscription_snapshot(db, row.chip_id)
     return _subscription_response(row, snap)
 

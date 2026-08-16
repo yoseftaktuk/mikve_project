@@ -233,14 +233,27 @@ class FingerprintsClient:
         resp.raise_for_status()
         return int(resp.json()["amount_cents"])
 
-    async def mark_subscription_free_entry(self, chip_id: str) -> None:
+    async def mark_subscription_free_entry(
+        self, chip_id: str, *, idempotency_key: str | None = None
+    ) -> None:
         """Record today's free subscription entrance for the chip."""
+        body: dict = {}
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
-                f"{self._base}/fingerprints/{chip_id}/subscriptions/mark-free-entry"
+                f"{self._base}/fingerprints/{chip_id}/subscriptions/mark-free-entry",
+                json=body or None,
             )
         if resp.status_code == 409:
-            raise ValueError("subscription_inactive")
+            code = "subscription_inactive"
+            try:
+                payload = resp.json()
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict) and payload.get("code") == "daily_limit_reached":
+                code = "daily_limit_reached"
+            raise ValueError(code)
         if resp.status_code == 404:
             raise ValueError("chip_not_found")
         resp.raise_for_status()

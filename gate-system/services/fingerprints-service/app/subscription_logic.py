@@ -13,10 +13,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gate_shared.errors import AppError
 
-from .hebrew_calendar import hebrew_month_for, israel_today
+from .hebrew_calendar import (
+    daily_free_entry_limit,
+    entry_day_kind,
+    hebrew_date_for,
+    hebrew_month_for,
+    israel_date_from_timestamp,
+    israel_now,
+    israel_today,
+)
 from .models import STATUS_SUB_ACTIVE, Chip, ChipActivity, MonthlySubscription
 
 logger = logging.getLogger(__name__)
+
+EVENT_FREE_ENTRY = "subscription_free_entry"
 
 
 @dataclass(frozen=True)
@@ -31,31 +41,121 @@ class SubscriptionSnapshot:
     current_hebrew_month_name: str
 
 
+def _free_entry_activity_key(chip_id: uuid.UUID, today: date, token: str) -> str:
+    """Unique chip_activity key. Caller token (attempt id) is enough to stay under 80 chars."""
+    if token:
+        return f"sub-free:{token}"
+    return f"sub-free:{chip_id}:{today.isoformat()}"
+
+
 async def get_active_subscription(
-    db: AsyncSession, chip_id: uuid.UUID, *, day: date | None = None
+    db: AsyncSession,
+    chip_id: uuid.UUID,
+    *,
+    day: date | None = None,
+    now: datetime | None = None,
+    for_update: bool = False,
 ) -> MonthlySubscription | None:
     """Return the active subscription for the current Hebrew month, if any."""
-    month = hebrew_month_for(day)
-    return await db.scalar(
-        select(MonthlySubscription).where(
-            MonthlySubscription.chip_id == chip_id,
-            MonthlySubscription.hebrew_year == month.year,
-            MonthlySubscription.hebrew_month == month.month,
-            MonthlySubscription.status == STATUS_SUB_ACTIVE,
+    month = hebrew_month_for(day, now=now)
+    stmt = select(MonthlySubscription).where(
+        MonthlySubscription.chip_id == chip_id,
+        MonthlySubscription.hebrew_year == month.year,
+        MonthlySubscription.hebrew_month == month.month,
+        MonthlySubscription.status == STATUS_SUB_ACTIVE,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return await db.scalar(stmt)
+
+
+async def _activity_by_key(db: AsyncSession, key: str) -> ChipActivity | None:
+    return await db.scalar(select(ChipActivity).where(ChipActivity.idempotency_key == key))
+
+
+async def count_today_free_entries(
+    db: AsyncSession,
+    *,
+    chip_id: uuid.UUID,
+    today: date,
+    sub: MonthlySubscription,
+) -> int:
+    """Successful free entries whose timestamps fall on this Israel civil date."""
+    rows = (
+        await db.scalars(
+            select(ChipActivity).where(
+                ChipActivity.chip_id == chip_id,
+                ChipActivity.event_type == EVENT_FREE_ENTRY,
+            )
         )
+    ).all()
+    count = 0
+    for row in rows:
+        if row.created_at is None:
+            continue
+        if israel_date_from_timestamp(row.created_at) == today:
+            count += 1
+    if count == 0 and sub.last_free_entry_on == today:
+        return 1
+    return count
+
+
+def _log_free_entry_decision(
+    *,
+    chip_id: uuid.UUID,
+    active: bool,
+    now: datetime,
+    used: int,
+    limit: int,
+    available: bool,
+    action: str,
+) -> None:
+    local = israel_now(now)
+    hd = hebrew_date_for(local.date())
+    logger.info(
+        "subscription_free_entry chip_id=%s action=%s active=%s israel_now=%s "
+        "hebrew=%s/%s/%s kind=%s limit=%s used=%s available=%s",
+        chip_id,
+        action,
+        active,
+        local.isoformat(),
+        hd.year,
+        hd.month,
+        hd.day,
+        entry_day_kind(local),
+        limit,
+        used,
+        available,
     )
 
 
 async def subscription_snapshot(
-    db: AsyncSession, chip_id: uuid.UUID, *, day: date | None = None
+    db: AsyncSession,
+    chip_id: uuid.UUID,
+    *,
+    day: date | None = None,
+    now: datetime | None = None,
 ) -> SubscriptionSnapshot:
     """Build subscription flags for API responses."""
-    today = day or israel_today()
+    local = israel_now(now)
+    today = day or local.date()
     month = hebrew_month_for(today)
     sub = await get_active_subscription(db, chip_id, day=today)
+    limit = daily_free_entry_limit(local)
+    used = 0
     free_available = False
     if sub is not None:
-        free_available = sub.last_free_entry_on != today
+        used = await count_today_free_entries(db, chip_id=chip_id, today=today, sub=sub)
+        free_available = used < limit
+    _log_free_entry_decision(
+        chip_id=chip_id,
+        active=sub is not None,
+        now=local,
+        used=used,
+        limit=limit,
+        available=free_available,
+        action="snapshot",
+    )
     return SubscriptionSnapshot(
         subscription_active=sub is not None,
         subscription_month_name=sub.hebrew_month_name if sub else None,
@@ -167,35 +267,107 @@ async def mark_free_entry(
     *,
     chip_id: uuid.UUID,
     day: date | None = None,
+    now: datetime | None = None,
+    idempotency_key: str | None = None,
 ) -> MonthlySubscription:
-    """Record today's free subscription entrance (idempotent for the same day)."""
-    today = day or israel_today()
-    sub = await get_active_subscription(db, chip_id, day=today)
+    """Record one free subscription entrance if a slot remains for this Israel day."""
+    local = israel_now(now)
+    today = day or local.date()
+    token = (idempotency_key or "").strip()
+    activity_key = _free_entry_activity_key(chip_id, today, token)
+
+    if token:
+        existing = await _activity_by_key(db, activity_key)
+        if existing is not None:
+            sub = await get_active_subscription(db, chip_id, day=today)
+            if sub is None:
+                raise AppError(
+                    code="subscription_inactive",
+                    message="No active subscription for the current Hebrew month",
+                    http_status=409,
+                )
+            return sub
+
+    sub = await get_active_subscription(db, chip_id, day=today, for_update=True)
     if sub is None:
+        await db.rollback()
         raise AppError(
             code="subscription_inactive",
             message="No active subscription for the current Hebrew month",
             http_status=409,
         )
-    if sub.last_free_entry_on == today:
-        return sub
+
+    if token:
+        existing = await _activity_by_key(db, activity_key)
+        if existing is not None:
+            await db.rollback()
+            return sub
+
+    limit = daily_free_entry_limit(local)
+    used = await count_today_free_entries(db, chip_id=chip_id, today=today, sub=sub)
+    if used >= limit:
+        await db.rollback()
+        _log_free_entry_decision(
+            chip_id=chip_id,
+            active=True,
+            now=local,
+            used=used,
+            limit=limit,
+            available=False,
+            action="mark_denied",
+        )
+        raise AppError(
+            code="daily_limit_reached",
+            message="No free subscription entries remain for today",
+            http_status=409,
+        )
+
+    if not token:
+        activity_key = f"sub-free:{chip_id}:{today.isoformat()}:{used + 1}"
+
     sub.last_free_entry_on = today
     db.add(
         ChipActivity(
             chip_id=chip_id,
-            event_type="subscription_free_entry",
+            event_type=EVENT_FREE_ENTRY,
             delta_cents=0,
             description=f"free entry on {today.isoformat()}",
-            idempotency_key=f"sub-free:{chip_id}:{today.isoformat()}",
+            idempotency_key=activity_key,
+            created_at=datetime.now(timezone.utc) if now is None else israel_now(now).astimezone(timezone.utc),
         )
     )
     try:
         await db.commit()
     except IntegrityError:
         await db.rollback()
+        raced = await _activity_by_key(db, activity_key)
+        if raced is not None:
+            refreshed = await get_active_subscription(db, chip_id, day=today)
+            if refreshed is not None:
+                return refreshed
         refreshed = await get_active_subscription(db, chip_id, day=today)
-        if refreshed is not None:
-            return refreshed
-        raise
+        if refreshed is None:
+            raise AppError(
+                code="subscription_inactive",
+                message="No active subscription for the current Hebrew month",
+                http_status=409,
+            ) from None
+        used_after = await count_today_free_entries(db, chip_id=chip_id, today=today, sub=refreshed)
+        if used_after >= daily_free_entry_limit(local):
+            raise AppError(
+                code="daily_limit_reached",
+                message="No free subscription entries remain for today",
+                http_status=409,
+            ) from None
+        return refreshed
     await db.refresh(sub)
+    _log_free_entry_decision(
+        chip_id=chip_id,
+        active=True,
+        now=local,
+        used=used + 1,
+        limit=limit,
+        available=used + 1 < limit,
+        action="mark",
+    )
     return sub

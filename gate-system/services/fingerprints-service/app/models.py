@@ -52,7 +52,7 @@ class ChipActivity(Base):
 
 
 class MonthlySubscription(Base):
-    """One active Hebrew-month subscription per chip (one free entrance per Israel day)."""
+    """One active Hebrew-month subscription per chip (free entrances per Israel day)."""
 
     __tablename__ = "monthly_subscriptions"
     __table_args__ = (

@@ -27,6 +27,7 @@ from app.webhook_logic import process_nedarim_webhook
 NEDARIM_IP = "18.196.146.117"
 TARGET_GROUPE = "מנוי מקווה חודש"
 BALANCE_GROUPE = "ערך צבור למקווה"
+SYNAGOGUE_GROUPE = "תרומה לבית הכנסת"
 TEST_ZEOUT = "123456789"
 
 
@@ -225,6 +226,69 @@ async def test_stored_value_groupe_credits_balance() -> None:
     assert reason == "nedarim_webhook"
     assert key == "nedarim:TEST-BAL-001"
     assert db.events["TEST-BAL-001"].processing_status == WEBHOOK_PROCESSED
+
+
+@pytest.mark.asyncio
+async def test_synagogue_donation_is_not_allowed() -> None:
+    result, db, client = await handle(
+        payload(TransactionId="TEST-SYN-001", Groupe=SYNAGOGUE_GROUPE)
+    )
+    assert result.code == WEBHOOK_IGNORED_CATEGORY
+    assert result.http_status == 200
+    assert client.adjustments == []
+    assert client.activations == []
+    event = db.events["TEST-SYN-001"]
+    assert event.processing_status == WEBHOOK_IGNORED_CATEGORY
+    assert event.processing_error == "not_allowed_groupe"
+
+
+@pytest.mark.asyncio
+async def test_not_allowed_groupe_retry_stays_ignored() -> None:
+    db = FakeWebhookDb()
+    client = seeded_client()
+    db.events["TEST-SYN-RETRY"] = NedarimWebhookEvent(
+        transaction_id="TEST-SYN-RETRY",
+        zeout=TEST_ZEOUT,
+        groupe=SYNAGOGUE_GROUPE,
+        amount_cents=5000,
+        currency=1,
+        processing_status=WEBHOOK_IGNORED_CATEGORY,
+        processing_error="not_allowed_groupe",
+        raw_payload={},
+    )
+    result, _, _ = await handle(
+        payload(TransactionId="TEST-SYN-RETRY", Groupe=SYNAGOGUE_GROUPE),
+        db=db,
+        chip_client=client,
+    )
+    assert result.code == WEBHOOK_IGNORED_CATEGORY
+    assert client.adjustments == []
+    assert db.events["TEST-SYN-RETRY"].processing_error == "not_allowed_groupe"
+
+
+@pytest.mark.asyncio
+async def test_ignored_category_retry_credits_when_groupe_now_matches() -> None:
+    db = FakeWebhookDb()
+    client = seeded_client()
+    db.events["TEST-RETRY"] = NedarimWebhookEvent(
+        transaction_id="TEST-RETRY",
+        zeout=TEST_ZEOUT,
+        groupe=BALANCE_GROUPE,
+        amount_cents=5000,
+        currency=1,
+        processing_status=WEBHOOK_IGNORED_CATEGORY,
+        processing_error="groupe_mismatch",
+        raw_payload={},
+    )
+    result, _, _ = await handle(
+        payload(TransactionId="TEST-RETRY", Groupe=BALANCE_GROUPE),
+        db=db,
+        chip_client=client,
+    )
+    assert result.code == WEBHOOK_PROCESSED
+    assert len(client.adjustments) == 1
+    assert client.adjustments[0][1] == 5000
+    assert db.events["TEST-RETRY"].processing_status == WEBHOOK_PROCESSED
 
 
 @pytest.mark.asyncio

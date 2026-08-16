@@ -129,6 +129,12 @@ class ActivateSubscriptionRequest(BaseModel):
     hebrew_month_name: str | None = Field(default=None, max_length=32)
 
 
+class MarkFreeEntryRequest(BaseModel):
+    """Optional body so a retried saga grant does not consume a second slot."""
+
+    idempotency_key: str | None = Field(default=None, max_length=64)
+
+
 class SubscriptionResponse(BaseModel):
     chip_id: uuid.UUID
     hebrew_year: int

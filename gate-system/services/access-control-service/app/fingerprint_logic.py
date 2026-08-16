@@ -424,11 +424,15 @@ async def process_fingerprint_scan(
         fee_cents=charge_fee,
     )
     logger.info(
-        "fingerprint_pending slot=%s uid=%s confidence=%s approval_id=%s",
+        "fingerprint_pending slot=%s uid=%s confidence=%s approval_id=%s "
+        "subscription_active=%s subscription_free=%s fee_cents=%s",
         slot,
         chip.uid,
         confidence,
         approval.approval_id,
+        chip.subscription_active,
+        use_subscription,
+        charge_fee,
     )
     await publish(
         {

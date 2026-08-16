@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { usePageMeta } from '../../../app/pageMeta'
 import { formatMoney } from '../../../app/money'
 import { PageShell } from '../../../components/PageShell'
@@ -25,6 +26,12 @@ export function ManagementPage() {
   } = useManagementPage()
 
   const users = useManagementUsers(authenticated)
+  const editFormRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!users.editingId) return
+    editFormRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [users.editingId])
 
   usePageMeta(
     authenticated
@@ -106,99 +113,101 @@ export function ManagementPage() {
           <p className={statusCardStyles.hint}>אין רשומים עדיין. רשום אצבע בדף רישום אצבע.</p>
         )}
 
-        <ul className={styles.userList}>
-          {users.users.map((user) => {
-            const isEditing = users.editingId === user.fingerprint_id
-            return (
-              <li key={user.fingerprint_id} className={styles.userRow}>
-                {isEditing ? (
-                  <div className={styles.editForm}>
-                    <label className={styles.formField}>
-                      שם
-                      <input
-                        value={users.editName}
-                        onChange={(e) => users.setEditName(e.target.value)}
-                        className={styles.input}
-                        disabled={users.saving}
-                      />
-                    </label>
-                    <label className={styles.formField}>
-                      תעודת זהות
-                      <input
-                        value={users.editNationalId}
-                        onChange={(e) =>
-                          users.setEditNationalId(e.target.value.replace(/\D/g, '').slice(0, 9))
-                        }
-                        inputMode="numeric"
-                        className={styles.input}
-                        disabled={users.saving}
-                        autoComplete="off"
-                      />
-                    </label>
-                    <label className={styles.formField}>
-                      יתרה (₪)
-                      <input
-                        value={users.editBalanceShekels}
-                        onChange={(e) => users.setEditBalanceShekels(e.target.value)}
-                        inputMode="decimal"
-                        className={styles.input}
-                        placeholder="0"
-                        disabled={users.saving}
-                      />
-                    </label>
-                    <label className={styles.checkboxField}>
-                      <input
-                        type="checkbox"
-                        checked={users.editEnabled}
-                        onChange={(e) => users.setEditEnabled(e.target.checked)}
-                        disabled={users.saving}
-                      />
-                      פעיל (מורשה לכניסה)
-                    </label>
-                    <div className={styles.actions}>
-                      <button type="button" disabled={users.saving} onClick={() => void users.saveEdit()}>
-                        {users.saving ? 'שומר…' : 'שמור'}
-                      </button>
-                      <button type="button" disabled={users.saving} onClick={users.cancelEdit}>
-                        ביטול
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className={styles.userMeta}>
-                      <div className={styles.userName}>
-                        {user.holder_name?.trim() || 'ללא שם'}
-                        {!user.is_enabled && <span className={styles.badgeDisabled}>חסום</span>}
-                      </div>
-                      <div className={styles.userSub}>
-                        {user.national_id ? `${user.national_id} · ` : ''}
-                        {user.uid} · {formatMoney(user.balance_cents)}
+        <div className={statusCardStyles.scrollBody}>
+          <ul className={styles.userList}>
+            {users.users.map((user) => {
+              const isEditing = users.editingId === user.fingerprint_id
+              return (
+                <li key={user.fingerprint_id} className={styles.userRow}>
+                  {isEditing ? (
+                    <div className={styles.editForm} ref={editFormRef}>
+                      <label className={styles.formField}>
+                        שם
+                        <input
+                          value={users.editName}
+                          onChange={(e) => users.setEditName(e.target.value)}
+                          className={styles.input}
+                          disabled={users.saving}
+                        />
+                      </label>
+                      <label className={styles.formField}>
+                        תעודת זהות
+                        <input
+                          value={users.editNationalId}
+                          onChange={(e) =>
+                            users.setEditNationalId(e.target.value.replace(/\D/g, '').slice(0, 9))
+                          }
+                          inputMode="numeric"
+                          className={styles.input}
+                          disabled={users.saving}
+                          autoComplete="off"
+                        />
+                      </label>
+                      <label className={styles.formField}>
+                        יתרה (₪)
+                        <input
+                          value={users.editBalanceShekels}
+                          onChange={(e) => users.setEditBalanceShekels(e.target.value)}
+                          inputMode="decimal"
+                          className={styles.input}
+                          placeholder="0"
+                          disabled={users.saving}
+                        />
+                      </label>
+                      <label className={styles.checkboxField}>
+                        <input
+                          type="checkbox"
+                          checked={users.editEnabled}
+                          onChange={(e) => users.setEditEnabled(e.target.checked)}
+                          disabled={users.saving}
+                        />
+                        פעיל (מורשה לכניסה)
+                      </label>
+                      <div className={styles.actions}>
+                        <button type="button" disabled={users.saving} onClick={() => void users.saveEdit()}>
+                          {users.saving ? 'שומר…' : 'שמור'}
+                        </button>
+                        <button type="button" disabled={users.saving} onClick={users.cancelEdit}>
+                          ביטול
+                        </button>
                       </div>
                     </div>
-                    <div className={styles.actions}>
-                      <button
-                        type="button"
-                        disabled={users.saving}
-                        onClick={() => users.startEdit(user)}
-                      >
-                        עריכה
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.dangerButton}
-                        disabled={users.saving}
-                        onClick={() => void users.deleteUser(user)}
-                      >
-                        מחק
-                      </button>
-                    </div>
-                  </>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+                  ) : (
+                    <>
+                      <div className={styles.userMeta}>
+                        <div className={styles.userName}>
+                          {user.holder_name?.trim() || 'ללא שם'}
+                          {!user.is_enabled && <span className={styles.badgeDisabled}>חסום</span>}
+                        </div>
+                        <div className={styles.userSub}>
+                          {user.national_id ? `${user.national_id} · ` : ''}
+                          {user.uid} · {formatMoney(user.balance_cents)}
+                        </div>
+                      </div>
+                      <div className={styles.actions}>
+                        <button
+                          type="button"
+                          disabled={users.saving}
+                          onClick={() => users.startEdit(user)}
+                        >
+                          עריכה
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.dangerButton}
+                          disabled={users.saving}
+                          onClick={() => void users.deleteUser(user)}
+                        >
+                          מחק
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       </StatusCard>
 
       {bannerError && <p className={styles.errorBanner}>{bannerError}</p>}

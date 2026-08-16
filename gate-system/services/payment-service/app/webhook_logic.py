@@ -32,10 +32,11 @@ from .settings import settings
 
 logger = logging.getLogger(__name__)
 
+# ignored_category is not terminal: the first delivery may have used an
+# outdated Groupe allow-list, and nothing was credited, so a retry is safe.
 TERMINAL_NO_RETRY = frozenset(
     {
         WEBHOOK_PROCESSED,
-        WEBHOOK_IGNORED_CATEGORY,
         WEBHOOK_USER_UNRESOLVED,
         WEBHOOK_INVALID,
         WEBHOOK_DUPLICATE,
@@ -238,7 +239,9 @@ async def process_nedarim_webhook(
         return _result_for_status(status, error)
 
     is_subscription = fields.groupe == settings.nedarim_target_group
-    is_balance = fields.groupe == settings.nedarim_balance_group
+    is_balance = fields.groupe in settings.nedarim_balance_groups
+    if fields.groupe in settings.nedarim_not_allowed_groups:
+        return await finish(WEBHOOK_IGNORED_CATEGORY, error="not_allowed_groupe")
     if not is_subscription and not is_balance:
         return await finish(WEBHOOK_IGNORED_CATEGORY, error="groupe_mismatch")
 

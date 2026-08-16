@@ -59,6 +59,8 @@ class FakeFingerprintsClient:
         self.chips = chips
         self.adjusts: list[dict] = []
         self.free_entries: list[str] = []
+        self.last_free_entry_key: str | None = None
+        self.fail_free_entry: str | None = None
 
     async def validate(self, uid: str) -> FakeChip:
         chip = self.chips.get(uid)
@@ -86,7 +88,12 @@ class FakeFingerprintsClient:
         self.adjusts.append({"delta_cents": delta_cents, "idempotency_key": idempotency_key})
         return chip.balance_cents
 
-    async def mark_subscription_free_entry(self, chip_id: str) -> None:
+    async def mark_subscription_free_entry(
+        self, chip_id: str, *, idempotency_key: str | None = None
+    ) -> None:
+        self.last_free_entry_key = idempotency_key
+        if self.fail_free_entry:
+            raise ValueError(self.fail_free_entry)
         self.free_entries.append(chip_id)
 
 
@@ -267,9 +274,46 @@ async def test_subscription_zero_fee_skips_balance_charge():
         assert chips["FP-001"].balance_cents == 0
         assert chip_client.adjusts == []
         assert chip_client.free_entries == [chip_id]
+        assert chip_client.last_free_entry_key
         granted = next(e for e in events if e.get("type") == "access.granted")
         assert granted["method"] == "subscription"
         assert granted["fee_cents"] == 0
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_subscription_daily_limit_denies_without_door():
+    chip_id = str(uuid.uuid4())
+    chips = {"FP-001": FakeChip(chip_id=chip_id, uid="FP-001", balance_cents=0)}
+    chip_client = FakeFingerprintsClient(chips)
+    chip_client.fail_free_entry = "daily_limit_reached"
+    events: list[dict] = []
+    db = FakeDb()
+    patches = _patch_repo()
+    for p in patches:
+        p.start()
+    try:
+        orch = AccessOrchestrator(
+            chip_client=chip_client,  # type: ignore[arg-type]
+            hardware_client=FakeHardwareClient(),  # type: ignore[arg-type]
+            cash_session=CashSession(timeout_seconds=20),
+            publish=events.append,
+        )
+        result = await orch.run_fingerprint_approve(
+            approval_id="appr-limit",
+            uid="FP-001",
+            chip_id=chip_id,
+            holder_name="Test",
+            balance_cents=0,
+            fee_cents=0,
+            db=db,  # type: ignore[arg-type]
+        )
+        assert result.granted is False
+        assert result.reason == "daily_limit_reached"
+        assert chip_client.free_entries == []
+        assert any(e.get("type") == "access.denied" and e.get("reason") == "daily_limit_reached" for e in events)
     finally:
         for p in patches:
             p.stop()
