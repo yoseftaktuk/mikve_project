@@ -9,13 +9,13 @@ Production-ready starter for a physical entrance gate with RFID/NFC access, bala
 - **Database**: PostgreSQL (normalized tables, separated by service schemas)
 - **Cache/Broker**: Redis (caching + pub/sub for real-time events)
 - **Reverse proxy**: Nginx (single public entrypoint)
-- **Management**: PIN-protected panel for chip top-up, fingerprint enrollment, and manual door open
+- **Management**: PIN-protected panel for fingerprint top-up, fingerprint enrollment, and manual door open
 - **Fingerprint**: AS608/R307 sensor — enroll a named person, then confirm each entry from the dashboard
 - **Hardware**: Raspberry Pi GPIO/serial abstraction with **mock mode**
 
 Services:
 
-- `fingerprints-service`: chip registry, balances, chip history (fingerprints are virtual chips `FP-<slot>`)
+- `fingerprints-service`: fingerprint registry, balances, fingerprint history (`FP-<slot>`)
 - `hardware-service`: RFID reader + coin acceptor + relay lock + fingerprint sensor + health monitoring
 - `access-control-service`: orchestrates entrance authorization, logs access, real-time events
 - `payment-service`: cash stub + **Nedarim Plus** credit-card balance top-up (callback is the only credit path)
@@ -75,11 +75,11 @@ Fingerprint-related events:
 | `fingerprint.enrolled` | `hardware.events` | template stored in the sensor (`session_id`, `slot`) |
 | `access.pending` | `access.events` | scan resolved to a person, waiting for confirmation (nothing charged yet) |
 | `access.pending_cleared` | `access.events` | approval expired, cancelled, or replaced by a newer scan |
-| `fingerprint.registered` | `access.events` | virtual chip `FP-<slot>` created/renamed with its balance |
+| `fingerprint.registered` | `access.events` | fingerprint record `FP-<slot>` created/renamed with its balance |
 
 ## הפעלה על Raspberry Pi
 
-מדריך להרצת מערכת השער על Raspberry Pi (דגם B או חדש יותר) עם מטבעון, קורא צ'יפים וריליי לדלת.
+מדריך להרצת מערכת השער על Raspberry Pi (דגם B או חדש יותר) עם מטבעון, קורא RFID וריליי לדלת.
 
 ### מה צריך
 
@@ -208,7 +208,7 @@ RFID_BAUDRATE=9600
 ENTRANCE_FEE_CENTS=500    # באגורות: 500 = ₪5
 DOOR_UNLOCK_SECONDS=5     # כמה שניות הדלת פתוחה
 CASH_SESSION_TIMEOUT_SECONDS=20  # איפוס תשלום מזומן חלקי אם לא נכנס מטבע נוסף
-MANAGEMENT_PIN=1234       # קוד סודי לדף ניהול (הטענת צ'יפ / פתיחת דלת / רישום אצבע)
+MANAGEMENT_PIN=1234       # קוד סודי לדף ניהול (הטענת טביעת אצבע / פתיחת דלת / רישום אצבע)
 FINGERPRINT_APPROVAL_TIMEOUT_SECONDS=25  # כמה זמן חלון האישור אחרי סריקת אצבע
 ```
 
@@ -250,20 +250,20 @@ http://<PI-IP>/
 
 לדוגמה: `http://192.168.1.50/`
 
-המסך מאזין אוטומטית לצ'יפים ומזומן. אין צורך בהרשמה — כניסה מתבצעת בדלת בלבד.
+המסך מאזין אוטומטית לטביעות אצבע ומזומן. אין צורך בהרשמה — כניסה מתבצעת בדלת בלבד.
 
-### 6. רישום צ'יפ (פעם אחת לכל צ'יפ)
+### 6. רישום טביעת אצבע (API)
 
-צ'יפ חייב להיות רשום במערכת עם יתרה לפני שימוש:
+טביעת אצבע חייבת להיות רשומה במערכת עם יתרה לפני שימוש:
 
 ```bash
 # החלף <PI-IP> ו-<UID> בערכים שלך
 curl -X POST http://<PI-IP>/api/fingerprints/fingerprints \
   -H "Content-Type: application/json" \
-  -d '{"uid": "YOUR-CHIP-UID"}'
+  -d '{"uid": "YOUR-FINGERPRINT-UID"}'
 
 # טעינת יתרה (1000 אגורות = ₪10)
-curl -X POST http://<PI-IP>/api/fingerprints/fingerprints/<CHIP_ID>/balance/adjust \
+curl -X POST http://<PI-IP>/api/fingerprints/fingerprints/<FINGERPRINT_ID>/balance/adjust \
   -H "Content-Type: application/json" \
   -d '{"delta_cents": 1000, "reason": "topup", "description": "initial balance"}'
 ```
@@ -277,7 +277,7 @@ curl -X POST http://<PI-IP>/api/fingerprints/fingerprints/<CHIP_ID>/balance/adju
    `הנח את האצבע` → `הרם את האצבע` → `הנח את אותה אצבע שוב`.
 3. בסיום נוצר כרטיס אישי בשם שהזנת. אם האצבע כבר רשומה, המסך מציג `האצבע הזו כבר רשומה` ולא נוצר כרטיס כפול.
 
-כל אצבע נשמרת בחיישן עצמו (ההשוואה מתבצעת שם), והמערכת שומרת רק **כרטיס וירטואלי** עם ה-UID `FP-<slot>` — לכן טעינת יתרה, היסטוריה ודף הניהול עובדים עליה בדיוק כמו על צ'יפ רגיל:
+כל אצבע נשמרת בחיישן עצמו (ההשוואה מתבצעת שם), והמערכת שומרת רק **כרטיס וירטואלי** עם ה-UID `FP-<slot>` — לכן טעינת יתרה, היסטוריה ודף הניהול עובדים עליה בדיוק כמו על כל רשומת טביעת אצבע אחרת:
 
 ```bash
 # התחברות ניהול (שומרת HttpOnly cookie בקובץ)
@@ -286,14 +286,15 @@ curl -c cookies.txt -X POST http://<PI-IP>/api/access/management/auth \
   -d '{"pin": "<MANAGEMENT_PIN>"}'
 
 # טעינת יתרה לאצבע שנרשמה בחריץ 12 (דרך דף הניהול או ישירות)
-curl -b cookies.txt -X POST http://<PI-IP>/api/access/management/chip/topup \
+# Live FastAPI route is still /management/chip/topup; documented here as fingerprint.
+curl -b cookies.txt -X POST http://<PI-IP>/api/access/management/fingerprint/topup \
   -H "Content-Type: application/json" \
   -d '{"uid": "FP-012", "amount_cents": 5000}'
 ```
 
 ### 8. כניסה עם טביעת אצבע (דורשת אישור)
 
-בשונה מצ'יפ, סריקת אצבע **לא מחייבת מיד**:
+סריקת אצבע **לא מחייבת מיד** — נדרש אישור בדשבורד:
 
 1. הנכנס מצמיד אצבע לחיישן.
 2. בדשבורד נפתחת חלונית עם **השם** של הנרשם, היתרה, עלות הכניסה וספירה לאחור.
@@ -308,16 +309,16 @@ curl -b cookies.txt -X POST http://<PI-IP>/api/access/management/chip/topup \
 מטבעון (GPIO 17)  ──► hardware-service ──► Redis ──► access-control-service
 קורא RFID (USB)   ──►       │                              │
 חיישן אצבע (UART) ──►       │                              ├─ מספיק מזומן? → פתיחת דלת
-                            │                              ├─ צ'יפ תקין?   → ניכוי יתרה → פתיחת דלת
+                            │                              ├─ טביעת אצבע תקינה? → ניכוי יתרה → פתיחת דלת
                             │                              └─ אצבע זוהתה?  → אישור בדשבורד → ניכוי → פתיחה
                             ▼
                     ריליי דלת (GPIO 22) ── float (כמו ניתוק IN1) ל-DOOR_UNLOCK_SECONDS שניות
 ```
 
 - **מזומן**: המערכת צוברת מטבעות עד `ENTRANCE_FEE_CENTS`, ואז פותחת את הדלת. אם נכנס סכום חלקי ולא נוסף מטבע תוך `CASH_SESSION_TIMEOUT_SECONDS` (ברירת מחדל 20), הסכום מתאפס.
-- **צ'יפ**: ניכוי עלות כניסה מהיתרה; אם יש מספיק כסף — הדלת נפתחת.
+- **טביעת אצבע (יתרה)**: ניכוי עלות כניסה מהיתרה; אם יש מספיק כסף — הדלת נפתחת.
 - **טביעת אצבע**: זיהוי בחיישן → חלונית אישור עם השם → רק לחיצה על הכפתור מחייבת ופותחת.
-- **דשבורד**: מציג הודעות, יתרת צ'יפ וסכום מזומן שנצבר.
+- **דשבורד**: מציג הודעות, יתרת טביעת אצבע וסכום מזומן שנצבר.
 
 ### 10. הפעלה אוטומטית אחרי אתחול
 
@@ -353,7 +354,7 @@ sudo systemctl start gate-system
 |------|-----------|
 | מטבעות לא מזוהים | חיווט לפין 17, `HARDWARE_MODE=rpi`, הרצה עם `docker-compose.pi.yml` |
 | דלת לא נפתחת | פין 22, ריליי, `docker compose logs hardware-service` |
-| צ'יפ נדחה | הצ'יפ רשום? יש יתרה ≥ `ENTRANCE_FEE_CENTS`? |
+| טביעת אצבע נדחתה | טביעת האצבע רשומה? יש יתרה ≥ `ENTRANCE_FEE_CENTS`? |
 | RFID לא עובד | `ls /dev/ttyUSB*`, עדכן `RFID_SERIAL_PORT` ב-`.env` |
 | אצבע לא נסרקת | `FINGERPRINT_SERIAL_PORT` נכון? החיישן ב-3.3V? TX/RX מוצלבים? |
 | חלונית האישור לא נפתחת | האצבע רשומה (`FP-<slot>` קיים)? יש יתרה מספקת? בדוק `docker compose logs access-control-service` |
@@ -388,13 +389,13 @@ curl -X POST http://localhost/api/hardware/dev/fingerprint/scan \
 
 ## Split deployment (Pi edge + LAN backend)
 
-Run only **hardware-service** and the **dashboard** on the Raspberry Pi. Put Postgres, Redis, chip/access/payment (and main Nginx) on another LAN PC to reduce Pi load.
+Run only **hardware-service** and the **dashboard** on the Raspberry Pi. Put Postgres, Redis, fingerprints/access/payment (and main Nginx) on another LAN PC to reduce Pi load.
 
 ```
 Raspberry Pi (edge)              LAN server (backend)
 ---------------------            -------------------------
 hardware-service (GPIO)   <----> Redis pub/sub + HTTP door open
-dashboard + thin Nginx           postgres, redis, chip, access,
+dashboard + thin Nginx           postgres, redis, fingerprints, access,
                                  payment, nginx, dashboard
 ```
 
@@ -562,18 +563,18 @@ Copy that URL into `services/payment-service/.env` as `PUBLIC_BASE_URL`, restart
 
 ### Kiosk flow reminder
 
-Fingerprint with balance &lt; entrance fee → Coins / Credit card / Cancel → presets ₪20 / ₪50 / ₪100 → Nedarim iframe → CallBack credits chip balance → scan again to enter. Coins still pay the door fee in-session; they do not top up balance.
+Fingerprint with balance &lt; entrance fee → Coins / Credit card / Cancel → presets ₪20 / ₪50 / ₪100 → Nedarim iframe → CallBack credits fingerprint balance → scan again to enter. Coins still pay the door fee in-session; they do not top up balance.
 
 ## Nedarim Plus institution webhook
 
-This path handles donations made through the **normal Nedarim Plus payment interface**, not the kiosk iframe. The donor is identified **only** by Nedarim `Zeout` → `Chip.national_id`. Name, phone, email, and `ClientId` are never used.
+This path handles donations made through the **normal Nedarim Plus payment interface**, not the kiosk iframe. The donor is identified **only** by Nedarim `Zeout` → `Fingerprint.national_id`. Name, phone, email, and `ClientId` are never used.
 
 Exact `Groupe` match (no trim):
 
 | Groupe | Action |
 |--------|--------|
 | `NEDARIM_TARGET_GROUP` (default `מנוי מקווה חודש`) | Activate a Hebrew-month subscription. Balance unchanged. |
-| `NEDARIM_BALANCE_GROUP` (comma-separated; default `ערך צבור למקווה`) | Credit chip ledger balance by `Amount`. No subscription. |
+| `NEDARIM_BALANCE_GROUP` (comma-separated; default `ערך צבור למקווה`) | Credit fingerprint ledger balance by `Amount`. No subscription. |
 | `NEDARIM_NOT_ALLOWED_GROUP` (comma-separated; default `תרומה לבית הכנסת`) | Store as `ignored_category` and do not credit. Deny wins over the allow lists. |
 
 Public URL (nginx prefix `/api/payments/`):
@@ -591,19 +592,19 @@ Shared conditions for both categories:
 1. Request passed source checks (Nedarim IPs `18.196.146.117` / `18.194.219.73`, plus `CF-Connecting-IP` when `NEDARIM_REQUIRE_CLOUDFLARE=true`)
 2. `TransactionId` is present and has not already been processed (unique DB constraint)
 3. `Groupe` equals `NEDARIM_TARGET_GROUP` or one of the `NEDARIM_BALANCE_GROUP` names **exactly**, and is not in `NEDARIM_NOT_ALLOWED_GROUP`
-4. `Zeout` normalizes to a 9-digit national ID that matches exactly one chip
+4. `Zeout` normalizes to a 9-digit national ID that matches exactly one fingerprint
 5. `Amount` is a positive shekel amount (stored as agorot; no floats)
 6. `Currency` is `1` (ILS). `2` (USD) is recorded as invalid and is not credited
 7. The same `TransactionId` was not already credited via the kiosk CallBack
 
 Then:
 
-- **Subscription Groupe:** fingerprints-service `activate_subscription` for the current Hebrew month. Ledger balance is unchanged. If the chip already has this month's membership, status is `failed` with `subscription_already_active`.
+- **Subscription Groupe:** fingerprints-service `activate_subscription` for the current Hebrew month. Ledger balance is unchanged. If the fingerprint already has this month's membership, status is `failed` with `subscription_already_active`.
 - **Stored-value Groupe:** `adjust_balance` by the donation amount (`idempotency_key=nedarim:{TransactionId}`).
 
 Otherwise the row is stored (`ignored_category` / `user_unresolved` / `invalid` / `duplicate` / `failed`) and neither membership nor balance changes.
 
-Chips that should receive these donations must have `national_id` set to the same 9-digit Zeout Nedarim sends.
+Fingerprints that should receive these donations must have `national_id` set to the same 9-digit Zeout Nedarim sends.
 
 ### Local curl (development only)
 
