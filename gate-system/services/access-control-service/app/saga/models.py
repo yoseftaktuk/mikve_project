@@ -22,7 +22,7 @@ class AccessAttempt(Base):
     method: Mapped[str] = mapped_column(String(20), nullable=False)
     subject_type: Mapped[str] = mapped_column(String(20), nullable=False)
     subject_ref: Mapped[str] = mapped_column(String(80), nullable=False)
-    chip_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    member_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     uid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     fee_cents: Mapped[int] = mapped_column(Integer, nullable=False)

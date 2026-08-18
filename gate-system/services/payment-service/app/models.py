@@ -42,7 +42,7 @@ class CardTopup(Base):
     # Also the correlation id: it is unguessable, so it doubles as the secret
     # inside the callback URL handed to Nedarim.
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    chip_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    member_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
     fingerprint_uid: Mapped[str] = mapped_column(String(64), nullable=False)
     amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=CURRENCY_ILS)
@@ -104,7 +104,7 @@ class NedarimWebhookEvent(Base):
     transaction_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
     confirmation: Mapped[str | None] = mapped_column(String(32), nullable=True)
     transaction_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    matched_chip_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True, nullable=True)
+    matched_member_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True, nullable=True)
     processing_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=WEBHOOK_RECEIVED, index=True
     )

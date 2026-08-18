@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from app.clients import ChipValidation
+from app.clients import MemberValidation
 from app.models import (
     PRODUCT_MONTHLY_SUBSCRIPTION,
     STATUS_ABANDONED,
@@ -18,7 +18,7 @@ from app.topup_logic import abandon_card_topup, create_card_topup, get_card_topu
 from gate_shared.errors import AppError
 
 
-def chip_id_for(uid: str) -> str:
+def member_id_for(uid: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, uid))
 
 
@@ -49,12 +49,12 @@ class FakeDb:
 
 
 class FakeFingerprintsClient:
-    def __init__(self, chips: dict[str, ChipValidation] | None = None) -> None:
+    def __init__(self, chips: dict[str, MemberValidation] | None = None) -> None:
         self.chips = chips or {}
 
-    async def validate(self, uid: str) -> ChipValidation:
+    async def validate(self, uid: str) -> MemberValidation:
         if uid not in self.chips:
-            raise ValueError("chip_not_found")
+            raise ValueError("member_not_found")
         return self.chips[uid]
 
 
@@ -95,9 +95,9 @@ def public_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.topup_logic.settings.subscription_price_cents", 30000)
 
 
-def enabled_chip(uid: str = "FP-001", balance: int = 0) -> ChipValidation:
-    return ChipValidation(
-        chip_id=chip_id_for(uid),
+def enabled_chip(uid: str = "FP-001", balance: int = 0) -> MemberValidation:
+    return MemberValidation(
+        member_id=member_id_for(uid),
         uid=uid,
         is_enabled=True,
         balance_cents=balance,
@@ -115,7 +115,7 @@ async def test_create_card_topup_happy_path(public_url: None) -> None:
         fingerprint_uid=chip.uid,
         amount_cents=5000,
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
         payment_provider=nedarim,  # type: ignore[arg-type]
     )
 
@@ -144,7 +144,7 @@ async def test_create_rejects_amount_outside_presets(public_url: None) -> None:
             fingerprint_uid=chip.uid,
             amount_cents=1234,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
             payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "invalid_amount"
@@ -157,16 +157,16 @@ async def test_create_rejects_unknown_chip(public_url: None) -> None:
             fingerprint_uid="FP-999",
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
             payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
-    assert exc.value.code == "chip_not_found"
+    assert exc.value.code == "member_not_found"
 
 
 @pytest.mark.asyncio
 async def test_create_rejects_disabled_chip(public_url: None) -> None:
-    chip = ChipValidation(
-        chip_id=chip_id_for("FP-002"),
+    chip = MemberValidation(
+        member_id=member_id_for("FP-002"),
         uid="FP-002",
         is_enabled=False,
         balance_cents=0,
@@ -176,10 +176,10 @@ async def test_create_rejects_disabled_chip(public_url: None) -> None:
             fingerprint_uid=chip.uid,
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
             payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
-    assert exc.value.code == "chip_disabled"
+    assert exc.value.code == "member_disabled"
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_create_requires_public_base_url(monkeypatch: pytest.MonkeyPatch) 
             fingerprint_uid=chip.uid,
             amount_cents=2000,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
             payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "public_base_url_missing"
@@ -210,7 +210,7 @@ async def test_create_marks_failed_when_nedarim_rejects(public_url: None) -> Non
             fingerprint_uid=chip.uid,
             amount_cents=2000,
             db=db,  # type: ignore[arg-type]
-            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
             payment_provider=nedarim,  # type: ignore[arg-type]
         )
     assert exc.value.code == "nedarim_rejected"
@@ -229,7 +229,7 @@ async def test_get_and_abandon(public_url: None) -> None:
         fingerprint_uid=chip.uid,
         amount_cents=2000,
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
         payment_provider=FakePaymentProvider(result=CreateTransactionResult("NED-2")),  # type: ignore[arg-type]
     )
     loaded = await get_card_topup(created.topup_id, db)  # type: ignore[arg-type]
@@ -254,7 +254,7 @@ async def test_create_subscription_purchase(public_url: None) -> None:
         amount_cents=30000,
         product=PRODUCT_MONTHLY_SUBSCRIPTION,
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
         payment_provider=nedarim,  # type: ignore[arg-type]
     )
 
@@ -275,7 +275,7 @@ async def test_create_subscription_rejects_wrong_amount(public_url: None) -> Non
             amount_cents=2000,
             product=PRODUCT_MONTHLY_SUBSCRIPTION,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
             payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "invalid_amount"
@@ -283,8 +283,8 @@ async def test_create_subscription_rejects_wrong_amount(public_url: None) -> Non
 
 @pytest.mark.asyncio
 async def test_create_subscription_rejects_when_already_active(public_url: None) -> None:
-    chip = ChipValidation(
-        chip_id=chip_id_for("FP-001"),
+    chip = MemberValidation(
+        member_id=member_id_for("FP-001"),
         uid="FP-001",
         is_enabled=True,
         balance_cents=0,
@@ -297,7 +297,7 @@ async def test_create_subscription_rejects_when_already_active(public_url: None)
             amount_cents=30000,
             product=PRODUCT_MONTHLY_SUBSCRIPTION,
             db=FakeDb(),  # type: ignore[arg-type]
-            chip_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
             payment_provider=FakePaymentProvider(result=CreateTransactionResult("x")),  # type: ignore[arg-type]
         )
     assert exc.value.code == "subscription_already_active"

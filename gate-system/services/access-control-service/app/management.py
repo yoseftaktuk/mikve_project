@@ -32,21 +32,21 @@ class ManagementSessionResponse(BaseModel):
     authenticated: bool
 
 
-class ChipTopupRequest(BaseModel):
+class MemberTopupRequest(BaseModel):
     uid: str = Field(min_length=4, max_length=64)
     amount_cents: int = Field(gt=0, le=1_000_000)
 
 
-class ChipTopupResponse(BaseModel):
+class MemberTopupResponse(BaseModel):
     uid: str
-    chip_id: str
+    member_id: str
     balance_cents: int
     added_cents: int
 
 
-class ChipInfoResponse(BaseModel):
+class MemberInfoResponse(BaseModel):
     uid: str
-    chip_id: str
+    member_id: str
     balance_cents: int
     is_enabled: bool
     holder_name: str | None = None
@@ -185,42 +185,42 @@ async def logout_management(request: Request, response: Response) -> ManagementS
     return ManagementSessionResponse(authenticated=False)
 
 
-async def get_chip_info(uid: str, chip_client: FingerprintsClient) -> ChipInfoResponse:
-    """Look up chip details by UID for the management panel."""
+async def get_chip_info(uid: str, member_client: FingerprintsClient) -> MemberInfoResponse:
+    """Look up member details by UID for the management panel."""
     try:
-        chip = await chip_client.validate(uid)
+        member = await member_client.validate(uid)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="chip_not_found") from None
-    return ChipInfoResponse(
-        uid=chip.uid,
-        chip_id=chip.chip_id,
-        balance_cents=chip.balance_cents,
-        is_enabled=chip.is_enabled,
-        holder_name=chip.holder_name,
-        subscription_active=chip.subscription_active,
-        subscription_month_name=chip.subscription_month_name,
-        subscription_free_entry_available_today=chip.subscription_free_entry_available_today,
-        current_hebrew_month_name=chip.current_hebrew_month_name,
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member_not_found") from None
+    return MemberInfoResponse(
+        uid=member.uid,
+        member_id=member.member_id,
+        balance_cents=member.balance_cents,
+        is_enabled=member.is_enabled,
+        holder_name=member.holder_name,
+        subscription_active=member.subscription_active,
+        subscription_month_name=member.subscription_month_name,
+        subscription_free_entry_available_today=member.subscription_free_entry_available_today,
+        current_hebrew_month_name=member.current_hebrew_month_name,
     )
 
 
-async def topup_chip(req: ChipTopupRequest, chip_client: FingerprintsClient) -> ChipTopupResponse:
-    """Register the chip if needed and add the requested balance."""
+async def topup_chip(req: MemberTopupRequest, member_client: FingerprintsClient) -> MemberTopupResponse:
+    """Register the member if needed and add the requested balance."""
     try:
-        chip = await chip_client.validate(req.uid)
+        member = await member_client.validate(req.uid)
     except ValueError:
-        await chip_client.register(req.uid)
-        chip = await chip_client.validate(req.uid)
+        await member_client.register(req.uid)
+        member = await member_client.validate(req.uid)
 
-    new_balance = await chip_client.adjust_balance(
-        chip_id=chip.chip_id,
+    new_balance = await member_client.adjust_balance(
+        member_id=member.member_id,
         delta_cents=req.amount_cents,
         reason="management_topup",
         description="management top-up",
     )
-    return ChipTopupResponse(
-        uid=chip.uid,
-        chip_id=chip.chip_id,
+    return MemberTopupResponse(
+        uid=member.uid,
+        member_id=member.member_id,
         balance_cents=new_balance,
         added_cents=req.amount_cents,
     )
@@ -231,12 +231,12 @@ async def open_door(hardware_client: HardwareClient) -> None:
     await hardware_client.open_door(seconds=settings.door_unlock_seconds)
 
 
-async def list_users(chip_client: FingerprintsClient) -> list[ManagementUserResponse]:
+async def list_users(member_client: FingerprintsClient) -> list[ManagementUserResponse]:
     """Return all registered ledger users for the management panel."""
-    users = await chip_client.list_users()
+    users = await member_client.list_users()
     return [
         ManagementUserResponse(
-            fingerprint_id=u.chip_id,
+            fingerprint_id=u.member_id,
             uid=u.uid,
             holder_name=u.holder_name,
             national_id=u.national_id,
@@ -249,9 +249,9 @@ async def list_users(chip_client: FingerprintsClient) -> list[ManagementUserResp
 
 
 async def update_user(
-    chip_id: str,
+    member_id: str,
     req: ManagementUserUpdateRequest,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
 ) -> ManagementUserResponse:
     """Update a registered user's name, national ID, enabled flag, and/or absolute balance."""
     from gate_shared.national_id import InvalidNationalIdError, normalize_national_id
@@ -274,8 +274,8 @@ async def update_user(
 
     if set_name or set_national_id or set_enabled:
         try:
-            user = await chip_client.update_user(
-                chip_id,
+            user = await member_client.update_user(
+                member_id,
                 holder_name=req.holder_name,
                 national_id=national_id_value,
                 is_enabled=req.is_enabled,
@@ -284,15 +284,15 @@ async def update_user(
                 set_is_enabled=set_enabled,
             )
         except ValueError as exc:
-            if str(exc) == "chip_not_found":
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="chip_not_found") from None
+            if str(exc) == "member_not_found":
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member_not_found") from None
             if str(exc) == "national_id_taken":
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="national_id_taken") from None
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     else:
-        user = await chip_client.get_by_id(chip_id)
+        user = await member_client.get_by_id(member_id)
         if user is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="chip_not_found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member_not_found")
 
     balance_cents = user.balance_cents
     if set_balance and req.balance_cents is not None:
@@ -300,8 +300,8 @@ async def update_user(
         delta = target - balance_cents
         if delta != 0:
             try:
-                balance_cents = await chip_client.adjust_balance(
-                    chip_id=chip_id,
+                balance_cents = await member_client.adjust_balance(
+                    member_id=member_id,
                     delta_cents=delta,
                     reason="management_set_balance",
                     description=f"management set balance to {target}",
@@ -316,7 +316,7 @@ async def update_user(
             balance_cents = target
 
     return ManagementUserResponse(
-        fingerprint_id=user.chip_id,
+        fingerprint_id=user.member_id,
         uid=user.uid,
         holder_name=user.holder_name,
         national_id=user.national_id,
@@ -327,27 +327,27 @@ async def update_user(
 
 
 async def delete_user(
-    chip_id: str,
-    chip_client: FingerprintsClient,
+    member_id: str,
+    member_client: FingerprintsClient,
     hardware_client: HardwareClient,
 ) -> None:
     """Delete a ledger user and clear the fingerprint sensor slot when applicable."""
-    meta = await chip_client.get_by_id(chip_id)
+    meta = await member_client.get_by_id(member_id)
     if meta is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="chip_not_found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member_not_found")
 
     slot = uid_to_slot(meta.uid)
     if slot is not None:
         try:
             await hardware_client.delete_fingerprint(slot)
         except HardwareUnavailableError:
-            logger.warning("fingerprint_delete_hardware_unavailable chip_id=%s slot=%s", chip_id, slot)
+            logger.warning("fingerprint_delete_hardware_unavailable member_id=%s slot=%s", member_id, slot)
         except Exception:
-            logger.exception("fingerprint_delete_hardware_failed chip_id=%s slot=%s", chip_id, slot)
+            logger.exception("fingerprint_delete_hardware_failed member_id=%s slot=%s", member_id, slot)
 
     try:
-        await chip_client.delete_user(chip_id)
+        await member_client.delete_user(member_id)
     except ValueError as exc:
-        if str(exc) == "chip_not_found":
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="chip_not_found") from None
+        if str(exc) == "member_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member_not_found") from None
         raise

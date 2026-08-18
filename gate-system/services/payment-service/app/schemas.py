@@ -3,12 +3,12 @@ import uuid
 from pydantic import BaseModel, Field
 
 
-class ChargeChipRequest(BaseModel):
+class ChargeMemberRequest(BaseModel):
     amount: float = Field(ge=1, description="Charge amount in ILS (shekels)")
 
 
-class ChargeChipResponse(BaseModel):
-    message: str = "Chip charged successfully."
+class ChargeMemberResponse(BaseModel):
+    message: str = "Member charged successfully."
 
 
 class CardTopupCreateRequest(BaseModel):
@@ -23,7 +23,7 @@ class CardTopupCreateResponse(BaseModel):
     iframe_url: str
     amount_cents: int
     fingerprint_uid: str
-    chip_id: uuid.UUID
+    member_id: uuid.UUID
     product: str = "balance"
 
 
@@ -32,7 +32,7 @@ class CardTopupStatusResponse(BaseModel):
     status: str
     amount_cents: int
     fingerprint_uid: str
-    chip_id: uuid.UUID
+    member_id: uuid.UUID
     product: str = "balance"
     nedarim_transaction_id: str | None = None
     balance_after_cents: int | None = None

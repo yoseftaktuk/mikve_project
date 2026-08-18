@@ -64,7 +64,7 @@ flowchart LR
 
 **SOLID:** Orchestrator owns flow only. Each port is one infrastructure concern (DIP). Implementations are injected adapters.
 
-**Identity:** No User table. Audit “UserId” field = `subject_ref` (`chip_id`, `uid`, or `cash`).
+**Identity:** No User table. Audit “UserId” field = `subject_ref` (`member_id`, `uid`, or `cash`).
 
 ---
 

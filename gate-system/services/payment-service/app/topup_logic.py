@@ -54,7 +54,7 @@ class CreatedCardTopup:
     iframe_url: str
     amount_cents: int
     fingerprint_uid: str
-    chip_id: uuid.UUID
+    member_id: uuid.UUID
     product: str
 
 
@@ -112,11 +112,11 @@ async def create_card_topup(
     fingerprint_uid: str,
     amount_cents: int,
     db: AsyncSession,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     payment_provider: PaymentProvider,
     product: str = PRODUCT_BALANCE,
 ) -> CreatedCardTopup:
-    """Resolve the chip, open a pending top-up, and create the Nedarim transaction.
+    """Resolve the member, open a pending top-up, and create the Nedarim transaction.
 
     The amount is fixed on this server before the iframe is shown, so the kiosk
     cannot alter what the cardholder is charged.
@@ -135,26 +135,26 @@ async def create_card_topup(
         raise AppError(code="invalid_fingerprint_uid", message="fingerprint_uid is required", http_status=400)
 
     try:
-        chip = await chip_client.validate(uid)
+        member = await member_client.validate(uid)
     except ValueError:
-        raise AppError(code="chip_not_found", message="Chip not found", http_status=404) from None
+        raise AppError(code="member_not_found", message="Member not found", http_status=404) from None
 
-    if not chip.is_enabled:
-        raise AppError(code="chip_disabled", message="Chip is disabled", http_status=409)
+    if not member.is_enabled:
+        raise AppError(code="member_disabled", message="Member is disabled", http_status=409)
 
     hebrew = current_hebrew_month()
-    if product == PRODUCT_MONTHLY_SUBSCRIPTION and chip.subscription_active:
+    if product == PRODUCT_MONTHLY_SUBSCRIPTION and member.subscription_active:
         raise AppError(
             code="subscription_already_active",
-            message="Chip already has an active subscription for this Hebrew month",
+            message="Member already has an active subscription for this Hebrew month",
             http_status=409,
-            details={"hebrew_month_name": chip.subscription_month_name or hebrew.name},
+            details={"hebrew_month_name": member.subscription_month_name or hebrew.name},
         )
 
     topup = CardTopup(
         id=uuid.uuid4(),
-        chip_id=uuid.UUID(chip.chip_id),
-        fingerprint_uid=chip.uid,
+        member_id=uuid.UUID(member.member_id),
+        fingerprint_uid=member.uid,
         amount_cents=amount_cents,
         product=product,
         status=STATUS_PENDING,
@@ -169,9 +169,9 @@ async def create_card_topup(
         else f"mock://local/card-topups/{topup.id}"
     )
     if product == PRODUCT_MONTHLY_SUBSCRIPTION:
-        comment = f"gate monthly subscription {chip.uid} {hebrew.name}"
+        comment = f"gate monthly subscription {member.uid} {hebrew.name}"
     else:
-        comment = f"gate top-up {chip.uid}"
+        comment = f"gate top-up {member.uid}"
     command = CreateTransactionCommand(
         amount_cents=amount_cents,
         callback_url=callback_url,
@@ -213,7 +213,7 @@ async def create_card_topup(
         iframe_url=payment_provider.iframe_url,
         amount_cents=topup.amount_cents,
         fingerprint_uid=topup.fingerprint_uid,
-        chip_id=topup.chip_id,
+        member_id=topup.member_id,
         product=topup.product,
     )
 
@@ -235,7 +235,7 @@ async def simulate_mock_card_payment(
     *,
     topup_id: uuid.UUID,
     db: AsyncSession,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     publish: PublishFn | None = None,
 ) -> CallbackHandlingResult:
     """Credit a pending mock top-up via the same callback path as production."""
@@ -270,7 +270,7 @@ async def simulate_mock_card_payment(
         payload=_mock_callback_payload(topup),
         source_ip=mock_ip,
         db=db,
-        chip_client=chip_client,
+        member_client=member_client,
         publish=publish,
     )
 
@@ -347,7 +347,7 @@ async def _credit_and_settle(
     topup: CardTopup,
     *,
     db: AsyncSession,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     transaction_id: str,
     confirmation: str | None,
     last_num: str | None,
@@ -358,8 +358,8 @@ async def _credit_and_settle(
     if product == PRODUCT_MONTHLY_SUBSCRIPTION:
         hebrew = current_hebrew_month()
         try:
-            balance_after = await chip_client.activate_subscription(
-                str(topup.chip_id),
+            balance_after = await member_client.activate_subscription(
+                str(topup.member_id),
                 amount_cents=topup.amount_cents,
                 nedarim_transaction_id=transaction_id,
                 hebrew_year=hebrew.year,
@@ -371,8 +371,8 @@ async def _credit_and_settle(
             raise AppError(code=code, message="Could not activate monthly subscription", http_status=502) from None
         event_type = "subscription.paid"
     else:
-        balance_after = await chip_client.adjust_balance(
-            chip_id=str(topup.chip_id),
+        balance_after = await member_client.adjust_balance(
+            member_id=str(topup.member_id),
             delta_cents=topup.amount_cents,
             reason="card_topup",
             description=f"Nedarim Plus top-up {transaction_id}",
@@ -406,7 +406,7 @@ async def _credit_and_settle(
             {
                 "type": event_type,
                 "topup_id": str(topup.id),
-                "chip_id": str(topup.chip_id),
+                "member_id": str(topup.member_id),
                 "fingerprint_uid": topup.fingerprint_uid,
                 "product": product,
                 "amount_cents": topup.amount_cents,
@@ -424,7 +424,7 @@ async def process_nedarim_callback(
     payload: dict[str, Any],
     source_ip: str | None,
     db: AsyncSession,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     publish: PublishFn | None = None,
 ) -> CallbackHandlingResult:
     """Verify a CallBack and credit the balance. Safe to call more than once.
@@ -578,7 +578,7 @@ async def process_nedarim_callback(
         balance_after = await _credit_and_settle(
             claimed,
             db=db,
-            chip_client=chip_client,
+            member_client=member_client,
             transaction_id=parsed.transaction_id,
             confirmation=parsed.confirmation,
             last_num=parsed.last_num,
@@ -590,20 +590,20 @@ async def process_nedarim_callback(
             topup.id,
             parsed.transaction_id,
         )
-        claimed.error_code = "chip_credit_failed"
+        claimed.error_code = "member_credit_failed"
         await db.commit()
         await _write_callback_audit(
             db,
             topup_id=topup.id,
             source_ip=source_ip,
             accepted=False,
-            rejection_reason="chip_credit_failed",
+            rejection_reason="member_credit_failed",
             payload=payload,
         )
         return CallbackHandlingResult(
             accepted=False,
             http_status=500,
-            code="chip_credit_failed",
+            code="member_credit_failed",
             message="Payment received but balance credit failed; staff must repair",
         )
 

@@ -37,9 +37,9 @@ from .schemas import (
     SimulateCashResponse,
 )
 from .management import (
-    ChipInfoResponse,
-    ChipTopupRequest,
-    ChipTopupResponse,
+    MemberInfoResponse,
+    MemberTopupRequest,
+    MemberTopupResponse,
     ManagementAuthResponse,
     ManagementPinRequest,
     ManagementSessionResponse,
@@ -68,7 +68,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-chip_client = FingerprintsClient()
+member_client = FingerprintsClient()
 hardware_client = HardwareClient()
 cash_session = CashSession(timeout_seconds=settings.cash_session_timeout_seconds)
 approvals = PendingApprovalStore(timeout_seconds=settings.fingerprint_approval_timeout_seconds)
@@ -92,7 +92,7 @@ async def startup() -> None:
     cash_session.set_publish(_publish)
     approvals.set_publish(_publish)
     orchestrator = AccessOrchestrator(
-        chip_client=chip_client,
+        member_client=member_client,
         hardware_client=hardware_client,
         cash_session=cash_session,
         publish=_publish,
@@ -100,7 +100,7 @@ async def startup() -> None:
     await fanout.start()
     hardware_consumer = HardwareEventConsumer(
         settings.redis_url,
-        chip_client=chip_client,
+        member_client=member_client,
         hardware_client=hardware_client,
         cash_session=cash_session,
         publish=_publish,
@@ -185,7 +185,7 @@ async def fingerprint_approve(req: FingerprintApprovalRequest, db: AsyncSession 
         return await approve_pending(
             req.approval_id,
             db,
-            chip_client=chip_client,
+            member_client=member_client,
             hardware_client=hardware_client,
             publish=_publish,
             approvals=approvals,
@@ -246,23 +246,23 @@ async def management_logout(request: Request, response: Response):
 
 @app.get(
     "/management/chip/{uid}",
-    response_model=ChipInfoResponse,
-    include_in_schema=False,
+    response_model=MemberInfoResponse,
+  include_in_schema=False,
 )
 async def management_chip_info(uid: str):
-    """Return chip balance and status for desk top-up / management UI."""
-    return await get_chip_info(uid, chip_client)
+    """Return member balance and status for desk top-up / management UI."""
+    return await get_chip_info(uid, member_client)
 
 
 @app.post(
     "/management/chip/topup",
-    response_model=ChipTopupResponse,
+    response_model=MemberTopupResponse,
     dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
-async def management_chip_topup(req: ChipTopupRequest):
-    """Top up a chip balance from the management panel."""
-    return await topup_chip(req, chip_client)
+async def management_chip_topup(req: MemberTopupRequest):
+    """Top up a member balance from the management panel."""
+    return await topup_chip(req, member_client)
 
 
 @app.get(
@@ -273,29 +273,29 @@ async def management_chip_topup(req: ChipTopupRequest):
 )
 async def management_users_list():
     """List registered fingerprint ledger users."""
-    return await management_list_users(chip_client)
+    return await management_list_users(member_client)
 
 
 @app.patch(
-    "/management/users/{chip_id}",
+    "/management/users/{member_id}",
     response_model=ManagementUserResponse,
     dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
-async def management_users_update(chip_id: str, req: ManagementUserUpdateRequest):
+async def management_users_update(member_id: str, req: ManagementUserUpdateRequest):
     """Edit a registered user's name and/or enabled flag."""
-    return await management_update_user(chip_id, req, chip_client)
+    return await management_update_user(member_id, req, member_client)
 
 
 @app.delete(
-    "/management/users/{chip_id}",
+    "/management/users/{member_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_management_token)],
     include_in_schema=False,
 )
-async def management_users_delete(chip_id: str):
+async def management_users_delete(member_id: str):
     """Delete a registered user and clear their fingerprint template when present."""
-    await management_delete_user(chip_id, chip_client, hardware_client)
+    await management_delete_user(member_id, member_client, hardware_client)
     return None
 
 

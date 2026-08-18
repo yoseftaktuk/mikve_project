@@ -94,13 +94,13 @@ async def _settle(
     status: str,
     *,
     error: str | None = None,
-    matched_chip_id: uuid.UUID | None = None,
+    matched_member_id: uuid.UUID | None = None,
 ) -> NedarimWebhookEvent:
     event.processing_status = status
     event.processing_error = error
     event.processed_at = datetime.now(timezone.utc)
-    if matched_chip_id is not None:
-        event.matched_chip_id = matched_chip_id
+    if matched_member_id is not None:
+        event.matched_member_id = matched_member_id
     await db.commit()
     return event
 
@@ -112,20 +112,20 @@ def _log_outcome(
     amount_cents: int | None,
     currency: int | None,
     zeout: str | None,
-    matched_chip_id: uuid.UUID | None,
+    matched_member_id: uuid.UUID | None,
     status: str,
     elapsed_ms: float,
     error: str | None = None,
 ) -> None:
     logger.info(
         "nedarim_webhook transaction_id=%s groupe=%r amount_cents=%s currency=%s "
-        "zeout_suffix=%s matched_chip_id=%s status=%s duration_ms=%.1f error=%s",
+        "zeout_suffix=%s matched_member_id=%s status=%s duration_ms=%.1f error=%s",
         transaction_id,
         groupe,
         amount_cents,
         currency,
         _zeout_log_token(zeout),
-        matched_chip_id,
+        matched_member_id,
         status,
         elapsed_ms,
         error or "-",
@@ -150,7 +150,7 @@ async def process_nedarim_webhook(
     payload: dict[str, Any],
     source_ip: str | None,
     db: AsyncSession,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     skip_source_ip: bool = False,
 ) -> WebhookHandlingResult:
     """Record an institution webhook; activate a subscription or credit balance by Groupe."""
@@ -213,7 +213,7 @@ async def process_nedarim_webhook(
                 amount_cents=existing.amount_cents,
                 currency=existing.currency,
                 zeout=existing.zeout,
-                matched_chip_id=existing.matched_chip_id,
+                matched_member_id=existing.matched_member_id,
                 status=WEBHOOK_DUPLICATE if existing.processing_status == WEBHOOK_PROCESSED else existing.processing_status,
                 elapsed_ms=elapsed,
             )
@@ -222,8 +222,8 @@ async def process_nedarim_webhook(
             return _result_for_status(existing.processing_status)
         event = existing
 
-    async def finish(status: str, *, error: str | None = None, chip_id: uuid.UUID | None = None) -> WebhookHandlingResult:
-        await _settle(db, event, status, error=error, matched_chip_id=chip_id)
+    async def finish(status: str, *, error: str | None = None, member_id: uuid.UUID | None = None) -> WebhookHandlingResult:
+        await _settle(db, event, status, error=error, matched_member_id=member_id)
         elapsed = (time.perf_counter() - started) * 1000
         _log_outcome(
             transaction_id=fields.transaction_id,
@@ -231,7 +231,7 @@ async def process_nedarim_webhook(
             amount_cents=fields.amount_cents,
             currency=fields.currency,
             zeout=fields.zeout_normalized,
-            matched_chip_id=chip_id or event.matched_chip_id,
+            matched_member_id=member_id or event.matched_member_id,
             status=status,
             elapsed_ms=elapsed,
             error=error,
@@ -258,17 +258,17 @@ async def process_nedarim_webhook(
         return await finish(WEBHOOK_INVALID, error="unsupported_currency")
 
     try:
-        match = await chip_client.lookup_by_national_id(fields.zeout_normalized)
+        match = await member_client.lookup_by_national_id(fields.zeout_normalized)
     except ValueError as exc:
-        code = str(exc) or "chip_not_found"
+        code = str(exc) or "member_not_found"
         reason = "ambiguous_zeout" if code == "national_id_ambiguous" else "unknown_zeout"
         return await finish(WEBHOOK_USER_UNRESOLVED, error=reason)
 
     if not match.is_enabled:
         logger.warning(
-            "nedarim_webhook_disabled_chip transaction_id=%s chip_id=%s zeout_suffix=%s",
+            "nedarim_webhook_disabled_member transaction_id=%s member_id=%s zeout_suffix=%s",
             fields.transaction_id,
-            match.chip_id,
+            match.member_id,
             _zeout_log_token(fields.zeout_normalized),
         )
 
@@ -276,13 +276,13 @@ async def process_nedarim_webhook(
         return await finish(
             WEBHOOK_DUPLICATE,
             error="kiosk_already_credited",
-            chip_id=uuid.UUID(match.chip_id),
+            member_id=uuid.UUID(match.member_id),
         )
 
     if is_balance:
         try:
-            await chip_client.adjust_balance(
-                chip_id=match.chip_id,
+            await member_client.adjust_balance(
+                member_id=match.member_id,
                 delta_cents=fields.amount_cents,
                 reason="nedarim_webhook",
                 description=f"Nedarim Plus webhook {fields.transaction_id}",
@@ -290,17 +290,17 @@ async def process_nedarim_webhook(
             )
         except Exception:
             logger.exception(
-                "nedarim_webhook_credit_failed transaction_id=%s chip_id=%s",
+                "nedarim_webhook_credit_failed transaction_id=%s member_id=%s",
                 fields.transaction_id,
-                match.chip_id,
+                match.member_id,
             )
-            return await finish(WEBHOOK_FAILED, error="credit_failed", chip_id=uuid.UUID(match.chip_id))
-        return await finish(WEBHOOK_PROCESSED, chip_id=uuid.UUID(match.chip_id))
+            return await finish(WEBHOOK_FAILED, error="credit_failed", member_id=uuid.UUID(match.member_id))
+        return await finish(WEBHOOK_PROCESSED, member_id=uuid.UUID(match.member_id))
 
     hebrew = current_hebrew_month()
     try:
-        await chip_client.activate_subscription(
-            match.chip_id,
+        await member_client.activate_subscription(
+            match.member_id,
             amount_cents=fields.amount_cents,
             nedarim_transaction_id=fields.transaction_id,
             hebrew_year=hebrew.year,
@@ -313,23 +313,23 @@ async def process_nedarim_webhook(
             return await finish(
                 WEBHOOK_FAILED,
                 error="subscription_already_active",
-                chip_id=uuid.UUID(match.chip_id),
+                member_id=uuid.UUID(match.member_id),
             )
         logger.exception(
-            "nedarim_webhook_subscription_failed transaction_id=%s chip_id=%s code=%s",
+            "nedarim_webhook_subscription_failed transaction_id=%s member_id=%s code=%s",
             fields.transaction_id,
-            match.chip_id,
+            match.member_id,
             code,
         )
-        return await finish(WEBHOOK_FAILED, error=code, chip_id=uuid.UUID(match.chip_id))
+        return await finish(WEBHOOK_FAILED, error=code, member_id=uuid.UUID(match.member_id))
     except Exception:
         logger.exception(
-            "nedarim_webhook_subscription_failed transaction_id=%s chip_id=%s",
+            "nedarim_webhook_subscription_failed transaction_id=%s member_id=%s",
             fields.transaction_id,
-            match.chip_id,
+            match.member_id,
         )
         return await finish(
-            WEBHOOK_FAILED, error="subscription_activate_failed", chip_id=uuid.UUID(match.chip_id)
+            WEBHOOK_FAILED, error="subscription_activate_failed", member_id=uuid.UUID(match.member_id)
         )
 
-    return await finish(WEBHOOK_PROCESSED, chip_id=uuid.UUID(match.chip_id))
+    return await finish(WEBHOOK_PROCESSED, member_id=uuid.UUID(match.member_id))

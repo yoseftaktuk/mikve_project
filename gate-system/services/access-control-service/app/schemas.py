@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class AccessDecisionResponse(BaseModel):
     granted: bool
     reason: str
-    chip_id: uuid.UUID | None = None
+    member_id: uuid.UUID | None = None
     fee_cents: int
     balance_before_cents: int | None = None
     balance_after_cents: int | None = None
@@ -47,7 +47,7 @@ class FingerprintEnrollStartResponse(BaseModel):
 
 class AccessLogResponse(BaseModel):
     id: int
-    chip_id: uuid.UUID | None
+    member_id: uuid.UUID | None
     uid: str | None
     decision: str
     reason: str

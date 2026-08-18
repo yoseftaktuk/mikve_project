@@ -22,8 +22,8 @@ from .schemas import (
     CardTopupCreateRequest,
     CardTopupCreateResponse,
     CardTopupStatusResponse,
-    ChargeChipRequest,
-    ChargeChipResponse,
+    ChargeMemberRequest,
+    ChargeMemberResponse,
 )
 from .hebrew_calendar import current_hebrew_month
 from .settings import settings
@@ -47,7 +47,7 @@ app = FastAPI(
 )
 
 redis_client: redis.Redis | None = None
-chip_client = FingerprintsClient()
+member_client = FingerprintsClient()
 payment_provider: PaymentProvider = build_payment_provider()
 
 
@@ -78,6 +78,46 @@ async def startup() -> None:
                   AND column_name = 'fingerprint_uid'
               ) THEN
                 EXECUTE 'ALTER TABLE {settings.postgres_schema}.card_topups RENAME COLUMN chip_uid TO fingerprint_uid';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'card_topups'
+                  AND column_name = 'chip_id'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'card_topups'
+                  AND column_name = 'member_id'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.card_topups RENAME COLUMN chip_id TO member_id';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'nedarim_webhook_events'
+                  AND column_name = 'matched_chip_id'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'nedarim_webhook_events'
+                  AND column_name = 'matched_member_id'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.nedarim_webhook_events RENAME COLUMN matched_chip_id TO matched_member_id';
               END IF;
             END $$;
             """
@@ -149,7 +189,7 @@ def _status_response(topup: CardTopup) -> CardTopupStatusResponse:
         status=topup.status,
         amount_cents=topup.amount_cents,
         fingerprint_uid=topup.fingerprint_uid,
-        chip_id=topup.chip_id,
+        member_id=topup.member_id,
         product=topup.product or "balance",
         nedarim_transaction_id=topup.nedarim_created_id or topup.nedarim_transaction_id,
         balance_after_cents=topup.balance_after_cents,
@@ -166,7 +206,7 @@ async def card_topups_create(req: CardTopupCreateRequest, db: AsyncSession = Dep
         amount_cents=req.amount_cents,
         product=req.product,
         db=db,
-        chip_client=chip_client,
+        member_client=member_client,
         payment_provider=payment_provider,
     )
     return CardTopupCreateResponse(
@@ -175,7 +215,7 @@ async def card_topups_create(req: CardTopupCreateRequest, db: AsyncSession = Dep
         iframe_url=created.iframe_url,
         amount_cents=created.amount_cents,
         fingerprint_uid=created.fingerprint_uid,
-        chip_id=created.chip_id,
+        member_id=created.member_id,
         product=created.product,
     )
 
@@ -206,7 +246,7 @@ async def dev_simulate_card_topup_pay(topup_id: uuid.UUID, db: AsyncSession = De
     result = await simulate_mock_card_payment(
         topup_id=topup_id,
         db=db,
-        chip_client=chip_client,
+        member_client=member_client,
         publish=_publish_payment_event,
     )
     topup = await db.get(CardTopup, topup_id)
@@ -262,7 +302,7 @@ async def nedarim_callback(
         payload=payload,
         source_ip=source_ip,
         db=db,
-        chip_client=chip_client,
+        member_client=member_client,
         publish=_publish_payment_event,
     )
     return JSONResponse(
@@ -311,7 +351,7 @@ async def nedarim_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         payload=payload,
         source_ip=source_ip,
         db=db,
-        chip_client=chip_client,
+        member_client=member_client,
         skip_source_ip=allow_local,
     )
     return JSONResponse(
@@ -324,14 +364,14 @@ async def nedarim_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     )
 
 
-@app.post("/charge-chip", response_model=ChargeChipResponse)
-async def charge_chip(req: ChargeChipRequest):
+@app.post("/charge-member", response_model=ChargeMemberResponse)
+async def charge_member(req: ChargeMemberRequest):
     """Legacy stub. Prefer POST /card-topups — this path does not credit a balance."""
     charge_credit_card(amount=req.amount)
     if redis_client is not None:
         await redis_client.publish(
             "payment.events",
-            json.dumps({"type": "chip.charged", "amount": req.amount}),
+            json.dumps({"type": "member.charged", "amount": req.amount}),
         )
-    logger.info("chip_charged amount=%s", req.amount)
-    return ChargeChipResponse()
+    logger.info("member_charged amount=%s", req.amount)
+    return ChargeMemberResponse()

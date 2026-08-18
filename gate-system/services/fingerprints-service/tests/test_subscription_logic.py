@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.sql.selectable import Select
 
 from app.hebrew_calendar import ISRAEL_TZ, hebrew_month_for
-from app.models import STATUS_SUB_ACTIVE, Chip, ChipActivity, MonthlySubscription
+from app.models import STATUS_SUB_ACTIVE, Member, MemberActivity, MonthlySubscription
 from app.subscription_logic import (
     EVENT_FREE_ENTRY,
     activate_subscription,
@@ -44,9 +44,9 @@ class FakeScalarResult:
 
 class FakeDb:
     def __init__(self) -> None:
-        self.chips: dict[uuid.UUID, Chip] = {}
+        self.members: dict[uuid.UUID, Member] = {}
         self.subs: list[MonthlySubscription] = []
-        self.activities: list[ChipActivity] = []
+        self.activities: list[MemberActivity] = []
         self.commits = 0
         self.rollbacks = 0
         self._row_lock = asyncio.Lock()
@@ -54,13 +54,13 @@ class FakeDb:
         self._next_activity_id = 1
 
     def add(self, row: object) -> None:
-        if isinstance(row, Chip):
-            self.chips[row.id] = row
+        if isinstance(row, Member):
+            self.members[row.id] = row
         elif isinstance(row, MonthlySubscription):
             if row.id is None:
                 row.id = uuid.uuid4()
             self.subs.append(row)
-        elif isinstance(row, ChipActivity):
+        elif isinstance(row, MemberActivity):
             if row.id is None:
                 row.id = self._next_activity_id
                 self._next_activity_id += 1
@@ -95,8 +95,8 @@ class FakeDb:
         return None
 
     async def get(self, model: type, key: object) -> object | None:
-        if model is Chip and isinstance(key, uuid.UUID):
-            return self.chips.get(key)
+        if model is Member and isinstance(key, uuid.UUID):
+            return self.members.get(key)
         return None
 
     def _match(self, stmt: Select) -> list[object]:
@@ -105,8 +105,8 @@ class FakeDb:
         if entity is MonthlySubscription:
             rows: list[object] = list(self.subs)
             for key, val in params.items():
-                if "chip_id" in key:
-                    rows = [r for r in rows if isinstance(r, MonthlySubscription) and r.chip_id == val]
+                if "member_id" in key:
+                    rows = [r for r in rows if isinstance(r, MonthlySubscription) and r.member_id == val]
                 elif "hebrew_year" in key:
                     rows = [r for r in rows if isinstance(r, MonthlySubscription) and r.hebrew_year == val]
                 elif "hebrew_month" in key:
@@ -116,15 +116,15 @@ class FakeDb:
                 elif "nedarim_transaction_id" in key:
                     rows = [r for r in rows if isinstance(r, MonthlySubscription) and r.nedarim_transaction_id == val]
             return rows
-        if entity is ChipActivity:
+        if entity is MemberActivity:
             rows = list(self.activities)
             for key, val in params.items():
                 if "idempotency_key" in key:
-                    rows = [r for r in rows if isinstance(r, ChipActivity) and r.idempotency_key == val]
-                elif "chip_id" in key:
-                    rows = [r for r in rows if isinstance(r, ChipActivity) and r.chip_id == val]
+                    rows = [r for r in rows if isinstance(r, MemberActivity) and r.idempotency_key == val]
+                elif "member_id" in key:
+                    rows = [r for r in rows if isinstance(r, MemberActivity) and r.member_id == val]
                 elif "event_type" in key:
-                    rows = [r for r in rows if isinstance(r, ChipActivity) and r.event_type == val]
+                    rows = [r for r in rows if isinstance(r, MemberActivity) and r.event_type == val]
             return rows
         return []
 
@@ -141,14 +141,14 @@ class FakeDb:
         return FakeScalarResult(self._match(stmt))
 
 
-def _chip() -> Chip:
-    return Chip(id=uuid.uuid4(), uid=f"FP-{uuid.uuid4().hex[:8]}", is_enabled=True)
+def _chip() -> Member:
+    return Member(id=uuid.uuid4(), uid=f"FP-{uuid.uuid4().hex[:8]}", is_enabled=True)
 
 
-def _sub(chip_id: uuid.UUID, *, year: int, month: int, name: str, last_free: date | None = None) -> MonthlySubscription:
+def _sub(member_id: uuid.UUID, *, year: int, month: int, name: str, last_free: date | None = None) -> MonthlySubscription:
     return MonthlySubscription(
         id=uuid.uuid4(),
-        chip_id=chip_id,
+        member_id=member_id,
         hebrew_year=year,
         hebrew_month=month,
         hebrew_month_name=name,
@@ -160,7 +160,7 @@ def _sub(chip_id: uuid.UUID, *, year: int, month: int, name: str, last_free: dat
     )
 
 
-def _seed_active(db: FakeDb, day: date, *, last_free: date | None = None) -> tuple[Chip, MonthlySubscription]:
+def _seed_active(db: FakeDb, day: date, *, last_free: date | None = None) -> tuple[Member, MonthlySubscription]:
     chip = _chip()
     month = hebrew_month_for(day)
     sub = _sub(chip.id, year=month.year, month=month.month, name=month.name, last_free=last_free)
@@ -169,10 +169,10 @@ def _seed_active(db: FakeDb, day: date, *, last_free: date | None = None) -> tup
     return chip, sub
 
 
-def _seed_used(db: FakeDb, chip_id: uuid.UUID, when: datetime, token: str) -> None:
+def _seed_used(db: FakeDb, member_id: uuid.UUID, when: datetime, token: str) -> None:
     db.add(
-        ChipActivity(
-            chip_id=chip_id,
+        MemberActivity(
+            member_id=member_id,
             event_type=EVENT_FREE_ENTRY,
             delta_cents=0,
             description="seed",
@@ -182,8 +182,8 @@ def _seed_used(db: FakeDb, chip_id: uuid.UUID, when: datetime, token: str) -> No
     )
 
 
-async def _available(db: FakeDb, chip_id: uuid.UUID, now: datetime) -> bool:
-    snap = await subscription_snapshot(db, chip_id, now=now)  # type: ignore[arg-type]
+async def _available(db: FakeDb, member_id: uuid.UUID, now: datetime) -> bool:
+    snap = await subscription_snapshot(db, member_id, now=now)  # type: ignore[arg-type]
     return snap.subscription_free_entry_available_today
 
 
@@ -193,7 +193,7 @@ async def test_normal_day_zero_entries_allowed():
     chip, _ = _seed_active(db, NORMAL)
     now = israel_at(NORMAL, 10)
     assert await _available(db, chip.id, now) is True
-    await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -204,7 +204,7 @@ async def test_normal_day_one_entry_denied():
     _seed_used(db, chip.id, israel_at(NORMAL, 9), "used")
     assert await _available(db, chip.id, now) is False
     with pytest.raises(AppError) as exc:
-        await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="a2")  # type: ignore[arg-type]
+        await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="a2")  # type: ignore[arg-type]
     assert exc.value.code == "daily_limit_reached"
 
 
@@ -217,7 +217,7 @@ async def test_friday_before_noon_one_entry_denied():
     _seed_used(db, chip.id, israel_at(FRIDAY, 8), "used")
     assert await _available(db, chip.id, now) is False
     with pytest.raises(AppError) as exc:
-        await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="a2")  # type: ignore[arg-type]
+        await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="a2")  # type: ignore[arg-type]
     assert exc.value.code == "daily_limit_reached"
 
 
@@ -227,12 +227,12 @@ async def test_friday_after_noon_second_entry_allowed_third_denied():
     chip, _ = _seed_active(db, FRIDAY)
     noon = israel_at(FRIDAY, 12)
     assert await _available(db, chip.id, noon) is True
-    await mark_free_entry(db, chip_id=chip.id, now=noon, idempotency_key="a1")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=noon, idempotency_key="a1")  # type: ignore[arg-type]
     assert await _available(db, chip.id, israel_at(FRIDAY, 14)) is True
-    await mark_free_entry(db, chip_id=chip.id, now=israel_at(FRIDAY, 14), idempotency_key="a2")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=israel_at(FRIDAY, 14), idempotency_key="a2")  # type: ignore[arg-type]
     assert await _available(db, chip.id, israel_at(FRIDAY, 15)) is False
     with pytest.raises(AppError) as exc:
-        await mark_free_entry(db, chip_id=chip.id, now=israel_at(FRIDAY, 15), idempotency_key="a3")  # type: ignore[arg-type]
+        await mark_free_entry(db, member_id=chip.id, now=israel_at(FRIDAY, 15), idempotency_key="a3")  # type: ignore[arg-type]
     assert exc.value.code == "daily_limit_reached"
 
 
@@ -242,11 +242,11 @@ async def test_erev_holiday_before_and_after_noon():
     chip, _ = _seed_active(db, EREV_PESACH)
     morning = israel_at(EREV_PESACH, 10)
     assert await _available(db, chip.id, morning) is True
-    await mark_free_entry(db, chip_id=chip.id, now=morning, idempotency_key="a1")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=morning, idempotency_key="a1")  # type: ignore[arg-type]
     assert await _available(db, chip.id, israel_at(EREV_PESACH, 11, 30)) is False
     afternoon = israel_at(EREV_PESACH, 14)
     assert await _available(db, chip.id, afternoon) is True
-    await mark_free_entry(db, chip_id=chip.id, now=afternoon, idempotency_key="a2")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=afternoon, idempotency_key="a2")  # type: ignore[arg-type]
     assert await _available(db, chip.id, israel_at(EREV_PESACH, 15)) is False
 
 
@@ -255,10 +255,10 @@ async def test_erev_yom_kippur_after_noon_allows_two():
     db = FakeDb()
     chip, _ = _seed_active(db, EREV_YK)
     now = israel_at(EREV_YK, 14)
-    await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
-    await mark_free_entry(db, chip_id=chip.id, now=israel_at(EREV_YK, 15), idempotency_key="a2")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=israel_at(EREV_YK, 15), idempotency_key="a2")  # type: ignore[arg-type]
     with pytest.raises(AppError) as exc:
-        await mark_free_entry(db, chip_id=chip.id, now=israel_at(EREV_YK, 16), idempotency_key="a3")  # type: ignore[arg-type]
+        await mark_free_entry(db, member_id=chip.id, now=israel_at(EREV_YK, 16), idempotency_key="a3")  # type: ignore[arg-type]
     assert exc.value.code == "daily_limit_reached"
 
 
@@ -267,7 +267,7 @@ async def test_holiday_day_itself_is_single_entry():
     db = FakeDb()
     chip, _ = _seed_active(db, YK)
     now = israel_at(YK, 15)
-    await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
     assert await _available(db, chip.id, now) is False
 
 
@@ -276,7 +276,7 @@ async def test_saturday_is_single_entry():
     db = FakeDb()
     chip, _ = _seed_active(db, SATURDAY)
     now = israel_at(SATURDAY, 15)
-    await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
     assert await _available(db, chip.id, now) is False
 
 
@@ -285,7 +285,7 @@ async def test_chol_hamoed_is_single_entry():
     db = FakeDb()
     chip, _ = _seed_active(db, CHM_PESACH)
     now = israel_at(CHM_PESACH, 15)
-    await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
+    await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="a1")  # type: ignore[arg-type]
     assert await _available(db, chip.id, now) is False
 
 
@@ -339,8 +339,8 @@ async def test_mark_retry_same_idempotency_key_does_not_consume_second_slot():
     db = FakeDb()
     chip, _ = _seed_active(db, FRIDAY)
     now = israel_at(FRIDAY, 14)
-    first = await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="attempt-1")  # type: ignore[arg-type]
-    second = await mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="attempt-1")  # type: ignore[arg-type]
+    first = await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="attempt-1")  # type: ignore[arg-type]
+    second = await mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="attempt-1")  # type: ignore[arg-type]
     assert first.id == second.id
     free = [a for a in db.activities if a.event_type == EVENT_FREE_ENTRY]
     assert len(free) == 1
@@ -355,8 +355,8 @@ async def test_concurrent_marks_cannot_both_take_last_slot():
     _seed_used(db, chip.id, israel_at(FRIDAY, 8), "already")
 
     results = await asyncio.gather(
-        mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="c1"),  # type: ignore[arg-type]
-        mark_free_entry(db, chip_id=chip.id, now=now, idempotency_key="c2"),  # type: ignore[arg-type]
+        mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="c1"),  # type: ignore[arg-type]
+        mark_free_entry(db, member_id=chip.id, now=now, idempotency_key="c2"),  # type: ignore[arg-type]
         return_exceptions=True,
     )
     successes = [r for r in results if not isinstance(r, BaseException)]
@@ -372,7 +372,7 @@ async def test_activate_is_idempotent_on_transaction_id():
     db.add(chip)
     first = await activate_subscription(
         db,  # type: ignore[arg-type]
-        chip_id=chip.id,
+        member_id=chip.id,
         amount_cents=30000,
         nedarim_transaction_id="TXN-1",
         hebrew_year=5786,
@@ -381,7 +381,7 @@ async def test_activate_is_idempotent_on_transaction_id():
     )
     second = await activate_subscription(
         db,  # type: ignore[arg-type]
-        chip_id=chip.id,
+        member_id=chip.id,
         amount_cents=30000,
         nedarim_transaction_id="TXN-1",
         hebrew_year=5786,
@@ -392,7 +392,7 @@ async def test_activate_is_idempotent_on_transaction_id():
     with pytest.raises(AppError) as exc:
         await activate_subscription(
             db,  # type: ignore[arg-type]
-            chip_id=chip.id,
+            member_id=chip.id,
             amount_cents=30000,
             nedarim_transaction_id="TXN-2",
             hebrew_year=5786,

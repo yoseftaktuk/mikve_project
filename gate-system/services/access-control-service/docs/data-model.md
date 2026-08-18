@@ -26,9 +26,9 @@ All monetary amounts are **agorot** (cents). Timestamps are `timestamptz`.
 | `id` | UUID PK | AccessAttemptId |
 | `correlation_id` | UUID NOT NULL | Request/event id (may equal `id`) |
 | `method` | `attempt_method` NOT NULL | |
-| `subject_type` | text NOT NULL | e.g. `chip_id`, `uid`, `cash` |
+| `subject_type` | text NOT NULL | e.g. `member_id`, `uid`, `cash` |
 | `subject_ref` | text NOT NULL | chip UUID string, uid, or `cash` |
-| `chip_id` | UUID NULL | When applicable |
+| `member_id` | UUID NULL | When applicable |
 | `uid` | text NULL | When applicable |
 | `status` | `attempt_status` NOT NULL | CAS target |
 | `fee_cents` | int NOT NULL | |

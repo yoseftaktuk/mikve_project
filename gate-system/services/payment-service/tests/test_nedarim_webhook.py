@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.clients import ChipNationalIdMatch
+from app.clients import MemberNationalIdMatch
 from app.models import (
     PRODUCT_BALANCE,
     STATUS_PAID,
@@ -31,7 +31,7 @@ SYNAGOGUE_GROUPE = "תרומה לבית הכנסת"
 TEST_ZEOUT = "123456789"
 
 
-def chip_id_for(uid: str) -> str:
+def member_id_for(uid: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, uid))
 
 
@@ -87,27 +87,27 @@ class FakeWebhookDb:
 @dataclass
 class FakeWebhookFingerprintsClient:
     balance: int = 10_000
-    chips_by_national_id: dict[str, ChipNationalIdMatch] = field(default_factory=dict)
+    chips_by_national_id: dict[str, MemberNationalIdMatch] = field(default_factory=dict)
     adjustments: list[tuple[str, int, str, str | None]] = field(default_factory=list)
     activations: list[dict] = field(default_factory=list)
     fail: bool = False
     already_active: bool = False
 
-    async def lookup_by_national_id(self, national_id: str) -> ChipNationalIdMatch:
+    async def lookup_by_national_id(self, national_id: str) -> MemberNationalIdMatch:
         match = self.chips_by_national_id.get(national_id)
         if match is None:
-            raise ValueError("chip_not_found")
+            raise ValueError("member_not_found")
         return match
 
     async def adjust_balance(
         self,
-        chip_id: str,
+        member_id: str,
         delta_cents: int,
         reason: str,
         description: str | None = None,
         idempotency_key: str | None = None,
     ) -> int:
-        self.adjustments.append((chip_id, delta_cents, reason, idempotency_key))
+        self.adjustments.append((member_id, delta_cents, reason, idempotency_key))
         if self.fail:
             raise RuntimeError("fingerprints-service down")
         keys = [item[3] for item in self.adjustments[:-1]]
@@ -118,7 +118,7 @@ class FakeWebhookFingerprintsClient:
 
     async def activate_subscription(
         self,
-        chip_id: str,
+        member_id: str,
         *,
         amount_cents: int,
         nedarim_transaction_id: str,
@@ -135,7 +135,7 @@ class FakeWebhookFingerprintsClient:
             return self.balance
         self.activations.append(
             {
-                "chip_id": chip_id,
+                "member_id": member_id,
                 "amount_cents": amount_cents,
                 "nedarim_transaction_id": nedarim_transaction_id,
                 "hebrew_year": hebrew_year,
@@ -147,10 +147,10 @@ class FakeWebhookFingerprintsClient:
 
 
 def seeded_client(*, balance: int = 10_000, zeout: str = TEST_ZEOUT) -> FakeWebhookFingerprintsClient:
-    chip_id = chip_id_for("FP-001")
+    member_id = member_id_for("FP-001")
     client = FakeWebhookFingerprintsClient(balance=balance)
-    client.chips_by_national_id[zeout] = ChipNationalIdMatch(
-        chip_id=chip_id,
+    client.chips_by_national_id[zeout] = MemberNationalIdMatch(
+        member_id=member_id,
         uid="FP-001",
         is_enabled=True,
         balance_cents=balance,
@@ -175,20 +175,20 @@ async def handle(
     body: dict[str, object],
     *,
     db: FakeWebhookDb | None = None,
-    chip_client: FakeWebhookFingerprintsClient | None = None,
+    member_client: FakeWebhookFingerprintsClient | None = None,
     source_ip: str | None = NEDARIM_IP,
     skip_source_ip: bool = False,
 ):
     db = db or FakeWebhookDb()
-    chip_client = chip_client or seeded_client()
+    member_client = member_client or seeded_client()
     result = await process_nedarim_webhook(
         payload=body,
         source_ip=source_ip,
         db=db,  # type: ignore[arg-type]
-        chip_client=chip_client,  # type: ignore[arg-type]
+        member_client=member_client,  # type: ignore[arg-type]
         skip_source_ip=skip_source_ip,
     )
-    return result, db, chip_client
+    return result, db, member_client
 
 
 @pytest.mark.asyncio
@@ -221,7 +221,7 @@ async def test_stored_value_groupe_credits_balance() -> None:
     assert client.balance == 15_000
     assert client.activations == []
     assert len(client.adjustments) == 1
-    chip_id, delta, reason, key = client.adjustments[0]
+    member_id, delta, reason, key = client.adjustments[0]
     assert delta == 5000
     assert reason == "nedarim_webhook"
     assert key == "nedarim:TEST-BAL-001"
@@ -259,7 +259,7 @@ async def test_not_allowed_groupe_retry_stays_ignored() -> None:
     result, _, _ = await handle(
         payload(TransactionId="TEST-SYN-RETRY", Groupe=SYNAGOGUE_GROUPE),
         db=db,
-        chip_client=client,
+        member_client=client,
     )
     assert result.code == WEBHOOK_IGNORED_CATEGORY
     assert client.adjustments == []
@@ -283,7 +283,7 @@ async def test_ignored_category_retry_credits_when_groupe_now_matches() -> None:
     result, _, _ = await handle(
         payload(TransactionId="TEST-RETRY", Groupe=BALANCE_GROUPE),
         db=db,
-        chip_client=client,
+        member_client=client,
     )
     assert result.code == WEBHOOK_PROCESSED
     assert len(client.adjustments) == 1
@@ -296,8 +296,8 @@ async def test_stored_value_duplicate_credits_once() -> None:
     db = FakeWebhookDb()
     client = seeded_client()
     body = payload(TransactionId="TEST-BAL-DUP", Groupe=BALANCE_GROUPE)
-    first, _, _ = await handle(body, db=db, chip_client=client)
-    second, _, _ = await handle(body, db=db, chip_client=client)
+    first, _, _ = await handle(body, db=db, member_client=client)
+    second, _, _ = await handle(body, db=db, member_client=client)
     assert first.code == WEBHOOK_PROCESSED
     assert second.code == WEBHOOK_DUPLICATE
     assert client.balance == 15_000
@@ -346,8 +346,8 @@ async def test_unknown_zeout() -> None:
 async def test_duplicate_transaction_id_activates_once() -> None:
     db = FakeWebhookDb()
     client = seeded_client()
-    first, _, _ = await handle(payload(TransactionId="TEST-005"), db=db, chip_client=client)
-    second, _, _ = await handle(payload(TransactionId="TEST-005"), db=db, chip_client=client)
+    first, _, _ = await handle(payload(TransactionId="TEST-005"), db=db, member_client=client)
+    second, _, _ = await handle(payload(TransactionId="TEST-005"), db=db, member_client=client)
     assert first.code == WEBHOOK_PROCESSED
     assert second.code == WEBHOOK_DUPLICATE
     assert client.balance == 10_000
@@ -360,8 +360,8 @@ async def test_concurrent_duplicate_activates_once() -> None:
     client = seeded_client()
     body = payload(TransactionId="TEST-006")
     results = await asyncio.gather(
-        handle(body, db=db, chip_client=client),
-        handle(body, db=db, chip_client=client),
+        handle(body, db=db, member_client=client),
+        handle(body, db=db, member_client=client),
     )
     codes = {item[0].code for item in results}
     assert WEBHOOK_PROCESSED in codes
@@ -413,7 +413,7 @@ async def test_kiosk_topup_collision_does_not_credit_again() -> None:
     db = FakeWebhookDb()
     db.topups_by_txn["TEST-KIOSK"] = CardTopup(
         id=uuid.uuid4(),
-        chip_id=uuid.UUID(chip_id_for("FP-001")),
+        member_id=uuid.UUID(member_id_for("FP-001")),
         fingerprint_uid="FP-001",
         amount_cents=5000,
         product=PRODUCT_BALANCE,
@@ -442,11 +442,11 @@ async def test_missing_transaction_id_is_invalid() -> None:
 async def test_ambiguous_zeout_does_not_credit() -> None:
     client = seeded_client()
 
-    async def ambiguous(_national_id: str) -> ChipNationalIdMatch:
+    async def ambiguous(_national_id: str) -> MemberNationalIdMatch:
         raise ValueError("national_id_ambiguous")
 
     client.lookup_by_national_id = ambiguous  # type: ignore[method-assign]
-    result, db, _ = await handle(payload(TransactionId="TEST-AMBIG"), chip_client=client)
+    result, db, _ = await handle(payload(TransactionId="TEST-AMBIG"), member_client=client)
     assert result.code == WEBHOOK_USER_UNRESOLVED
     assert db.events["TEST-AMBIG"].processing_error == "ambiguous_zeout"
     assert client.balance == 10_000
@@ -457,7 +457,7 @@ async def test_ambiguous_zeout_does_not_credit() -> None:
 async def test_already_active_subscription_fails_without_balance_change() -> None:
     client = seeded_client()
     client.already_active = True
-    result, db, _ = await handle(payload(TransactionId="TEST-ACTIVE"), chip_client=client)
+    result, db, _ = await handle(payload(TransactionId="TEST-ACTIVE"), member_client=client)
     assert result.code == WEBHOOK_FAILED
     assert result.http_status == 500
     assert db.events["TEST-ACTIVE"].processing_error == "subscription_already_active"

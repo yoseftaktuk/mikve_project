@@ -50,7 +50,7 @@ class PubSubFanout:
         """Subscribe to Redis channels and fan messages out to WebSockets."""
         assert self._redis is not None
         pubsub = self._redis.pubsub()
-        await pubsub.subscribe("hardware.events", "access.events", "chip.events")
+        await pubsub.subscribe("hardware.events", "access.events", "member.events")
         async for msg in self._iter_messages(pubsub):
             await self._broadcast(msg)
 

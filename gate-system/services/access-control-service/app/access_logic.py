@@ -212,7 +212,7 @@ async def process_cash_inserted(
     cash_session: CashSession,
     hardware_client: HardwareClient,
     publish,
-    chip_client: FingerprintsClient | None = None,
+    member_client: FingerprintsClient | None = None,
     hardware_event_id: str | None = None,
 ) -> tuple[bool, int]:
     """Accumulate cash and open the door once the entrance fee is reached."""
@@ -220,7 +220,7 @@ async def process_cash_inserted(
         from .saga import AccessOrchestrator
 
         orch = AccessOrchestrator(
-            chip_client=chip_client or FingerprintsClient(),
+            member_client=member_client or FingerprintsClient(),
             hardware_client=hardware_client,
             cash_session=cash_session,
             publish=publish,
@@ -270,7 +270,7 @@ async def _legacy_process_cash_inserted(
     remaining = paid_total - fee
     await hardware_client.open_door(seconds=door_seconds)
     log = AccessLog(
-        chip_id=None,
+        member_id=None,
         uid=None,
         decision="granted",
         reason="cash_paid",

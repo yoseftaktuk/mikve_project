@@ -26,6 +26,7 @@ from .repository import AccessAttemptRepository, TransitionConflictError
 from .statuses import (
     METHOD_CASH,
     METHOD_FINGERPRINT,
+    METHOD_MEMBER,
     STATUS_CHARGED,
     STATUS_COMPLETED,
     STATUS_CREATED,
@@ -55,12 +56,12 @@ class AccessOrchestrator:
     def __init__(
         self,
         *,
-        chip_client: FingerprintsClient,
+        member_client: FingerprintsClient,
         hardware_client: HardwareClient,
         cash_session: CashSession,
         publish: PublishFn,
     ) -> None:
-        self._chip = chip_client
+        self._member_client = member_client
         self._hardware = hardware_client
         self._cash = cash_session
         self._publish = publish
@@ -70,7 +71,7 @@ class AccessOrchestrator:
         *,
         approval_id: str,
         uid: str,
-        chip_id: str,
+        member_id: str,
         holder_name: str | None,
         balance_cents: int,
         fee_cents: int,
@@ -86,7 +87,7 @@ class AccessOrchestrator:
             subject_type="uid",
             subject_ref=uid,
             uid=uid,
-            chip_id=uuid.UUID(chip_id),
+            member_id=uuid.UUID(member_id),
             status=STATUS_CREATED,
             fee_cents=fee_cents,
             balance_before_cents=balance_cents,
@@ -102,7 +103,7 @@ class AccessOrchestrator:
             repo,
             db,
             attempt,
-            chip_id=chip_id,
+            member_id=member_id,
             uid=uid,
             method=METHOD_FINGERPRINT,
             before=balance_cents,
@@ -270,7 +271,7 @@ class AccessOrchestrator:
         db: AsyncSession,
         attempt: AccessAttempt,
         *,
-        chip_id: str,
+        member_id: str,
         uid: str,
         method: str,
         before: int,
@@ -285,7 +286,7 @@ class AccessOrchestrator:
                     attempt_id=attempt.id,
                     amount_cents=fee,
                     status="pending",
-                    provider="subscription" if fee == 0 else "chip",
+                    provider="subscription" if fee == 0 else "member",
                     idempotency_key=key,
                     correlation_id=attempt.correlation_id,
                 )
@@ -294,29 +295,29 @@ class AccessOrchestrator:
 
         if fee == 0:
             try:
-                await self._chip.mark_subscription_free_entry(
-                    chip_id, idempotency_key=str(attempt.id)
+                await self._member_client.mark_subscription_free_entry(
+                    member_id, idempotency_key=str(attempt.id)
                 )
             except ValueError as exc:
                 reason = str(exc) if str(exc) in {"subscription_inactive", "daily_limit_reached"} else "subscription_inactive"
                 logger.info(
-                    "subscription_free_entry_denied attempt_id=%s chip_id=%s reason=%s",
+                    "subscription_free_entry_denied attempt_id=%s member_id=%s reason=%s",
                     attempt.id,
-                    chip_id,
+                    member_id,
                     reason,
                 )
                 await self._fail_never_charged(repo, attempt, reason)
                 await self._legacy_deny(
-                    db, uid=uid, chip_id=chip_id, reason=reason, fee=fee, before=before
+                    db, uid=uid, member_id=member_id, reason=reason, fee=fee, before=before
                 )
                 await db.commit()
                 await self._publish_denied(
-                    uid=uid, chip_id=chip_id, reason=reason, fee=fee, balance=before
+                    uid=uid, member_id=member_id, reason=reason, fee=fee, balance=before
                 )
                 return AccessDecisionResponse(
                     granted=False,
                     reason=reason,
-                    chip_id=chip_id,
+                    member_id=member_id,
                     fee_cents=fee,
                     balance_before_cents=before,
                     balance_after_cents=before,
@@ -328,7 +329,7 @@ class AccessOrchestrator:
                 return AccessDecisionResponse(
                     granted=False,
                     reason="subscription_unavailable",
-                    chip_id=chip_id,
+                    member_id=member_id,
                     fee_cents=fee,
                     balance_before_cents=before,
                     balance_after_cents=before,
@@ -350,8 +351,8 @@ class AccessOrchestrator:
             door_ok = await self._open_door_with_retries(repo, db, attempt)
             if door_ok:
                 await repo.transition(attempt.id, STATUS_DOOR_OPENING, STATUS_COMPLETED, "door_confirmed")
-                await self._legacy_grant_chip(
-                    db, uid=uid, chip_id=chip_id, fee=fee, before=before, after=after
+                await self._legacy_grant_member(
+                    db, uid=uid, member_id=member_id, fee=fee, before=before, after=after
                 )
                 await db.commit()
                 await self._cash.clear_for_other_method()
@@ -359,7 +360,7 @@ class AccessOrchestrator:
                     {
                         "type": "access.granted",
                         "uid": uid,
-                        "chip_id": chip_id,
+                        "member_id": member_id,
                         "method": "subscription",
                         "holder_name": holder_name,
                         "fee_cents": fee,
@@ -371,7 +372,7 @@ class AccessOrchestrator:
                 return AccessDecisionResponse(
                     granted=True,
                     reason="ok",
-                    chip_id=chip_id,
+                    member_id=member_id,
                     fee_cents=fee,
                     balance_before_cents=before,
                     balance_after_cents=after,
@@ -382,15 +383,15 @@ class AccessOrchestrator:
             return AccessDecisionResponse(
                 granted=False,
                 reason=(refreshed.failure_reason if refreshed else None) or "door_failed",
-                chip_id=chip_id,
+                member_id=member_id,
                 fee_cents=fee,
                 balance_before_cents=before,
                 balance_after_cents=after,
             )
 
         try:
-            after = await self._chip.adjust_balance(
-                chip_id=chip_id,
+            after = await self._member_client.adjust_balance(
+                member_id=member_id,
                 delta_cents=-fee,
                 reason="entry_fee",
                 description=f"entrance fee ({method})",
@@ -399,16 +400,16 @@ class AccessOrchestrator:
         except ValueError:
             await self._fail_never_charged(repo, attempt, "insufficient_balance")
             await self._legacy_deny(
-                db, uid=uid, chip_id=chip_id, reason="insufficient_balance", fee=fee, before=before
+                db, uid=uid, member_id=member_id, reason="insufficient_balance", fee=fee, before=before
             )
             await db.commit()
             await self._publish_denied(
-                uid=uid, chip_id=chip_id, reason="insufficient_balance", fee=fee, balance=before
+                uid=uid, member_id=member_id, reason="insufficient_balance", fee=fee, balance=before
             )
             return AccessDecisionResponse(
                 granted=False,
                 reason="insufficient_balance",
-                chip_id=chip_id,
+                member_id=member_id,
                 fee_cents=fee,
                 balance_before_cents=before,
                 balance_after_cents=before,
@@ -420,7 +421,7 @@ class AccessOrchestrator:
             return AccessDecisionResponse(
                 granted=False,
                 reason="ledger_unavailable",
-                chip_id=chip_id,
+                member_id=member_id,
                 fee_cents=fee,
                 balance_before_cents=before,
                 balance_after_cents=before,
@@ -442,8 +443,8 @@ class AccessOrchestrator:
         door_ok = await self._open_door_with_retries(repo, db, attempt)
         if door_ok:
             await repo.transition(attempt.id, STATUS_DOOR_OPENING, STATUS_COMPLETED, "door_confirmed")
-            await self._legacy_grant_chip(
-                db, uid=uid, chip_id=chip_id, fee=fee, before=before, after=after
+            await self._legacy_grant_member(
+                db, uid=uid, member_id=member_id, fee=fee, before=before, after=after
             )
             await db.commit()
             await self._cash.clear_for_other_method()
@@ -451,7 +452,7 @@ class AccessOrchestrator:
                 {
                     "type": "access.granted",
                     "uid": uid,
-                    "chip_id": chip_id,
+                    "member_id": member_id,
                     "method": method,
                     "holder_name": holder_name,
                     "fee_cents": fee,
@@ -463,7 +464,7 @@ class AccessOrchestrator:
             return AccessDecisionResponse(
                 granted=True,
                 reason="ok",
-                chip_id=chip_id,
+                member_id=member_id,
                 fee_cents=fee,
                 balance_before_cents=before,
                 balance_after_cents=after,
@@ -476,7 +477,7 @@ class AccessOrchestrator:
         return AccessDecisionResponse(
             granted=False,
             reason=refreshed.failure_reason or "door_failed",
-            chip_id=chip_id,
+            member_id=member_id,
             fee_cents=fee,
             balance_before_cents=before,
             balance_after_cents=refreshed.balance_after_cents or before,
@@ -613,12 +614,12 @@ class AccessOrchestrator:
     async def _compensate_balance(
         self, repo: AccessAttemptRepository, db: AsyncSession, attempt: AccessAttempt
     ) -> None:
-        if attempt.chip_id is None:
+        if attempt.member_id is None:
             await repo.transition(
-                attempt.id, STATUS_REFUND_PENDING, STATUS_MANUAL_REVIEW, "refund_failed_no_chip"
+                attempt.id, STATUS_REFUND_PENDING, STATUS_MANUAL_REVIEW, "refund_failed_no_member"
             )
             await db.commit()
-            await self._alert("RefundFailed", {"attempt_id": str(attempt.id), "error": "no_chip"})
+            await self._alert("RefundFailed", {"attempt_id": str(attempt.id), "error": "no_member"})
             return
 
         key = refund_key(str(attempt.id))
@@ -629,7 +630,7 @@ class AccessOrchestrator:
                     attempt_id=attempt.id,
                     amount_cents=attempt.fee_cents,
                     status="pending",
-                    provider="chip",
+                    provider="member",
                     idempotency_key=key,
                     correlation_id=attempt.correlation_id,
                 )
@@ -639,8 +640,8 @@ class AccessOrchestrator:
         last_error = "refund_failed"
         for _ in range(max(1, settings.refund_max_retries)):
             try:
-                after = await self._chip.adjust_balance(
-                    chip_id=str(attempt.chip_id),
+                after = await self._member_client.adjust_balance(
+                    member_id=str(attempt.member_id),
                     delta_cents=attempt.fee_cents,
                     reason="entry_fee_refund",
                     description=f"access-refund:{attempt.id}",
@@ -683,7 +684,7 @@ class AccessOrchestrator:
         await db.commit()
         await self._alert(
             "RefundFailed",
-            {"attempt_id": str(attempt.id), "error": last_error, "chip_id": str(attempt.chip_id)},
+            {"attempt_id": str(attempt.id), "error": last_error, "member_id": str(attempt.member_id)},
         )
 
     async def _compensate_cash(
@@ -816,7 +817,7 @@ class AccessOrchestrator:
         return AccessDecisionResponse(
             granted=granted,
             reason="ok" if granted else (attempt.failure_reason or attempt.status.lower()),
-            chip_id=str(attempt.chip_id) if attempt.chip_id else None,
+            member_id=str(attempt.member_id) if attempt.member_id else None,
             fee_cents=attempt.fee_cents,
             balance_before_cents=attempt.balance_before_cents,
             balance_after_cents=attempt.balance_after_cents,
@@ -827,14 +828,14 @@ class AccessOrchestrator:
         db: AsyncSession,
         *,
         uid: str | None,
-        chip_id: str | None,
+        member_id: str | None,
         reason: str,
         fee: int,
         before: int | None = None,
     ) -> None:
         db.add(
             AccessLog(
-                chip_id=chip_id,
+                member_id=member_id,
                 uid=uid,
                 decision="denied",
                 reason=reason,
@@ -844,19 +845,19 @@ class AccessOrchestrator:
             )
         )
 
-    async def _legacy_grant_chip(
+    async def _legacy_grant_member(
         self,
         db: AsyncSession,
         *,
         uid: str,
-        chip_id: str,
+        member_id: str,
         fee: int,
         before: int,
         after: int,
     ) -> None:
         db.add(
             AccessLog(
-                chip_id=chip_id,
+                member_id=member_id,
                 uid=uid,
                 decision="granted",
                 reason="ok",
@@ -869,7 +870,7 @@ class AccessOrchestrator:
     async def _legacy_grant_cash(self, db: AsyncSession, *, fee: int, paid_total: int) -> None:
         db.add(
             AccessLog(
-                chip_id=None,
+                member_id=None,
                 uid=None,
                 decision="granted",
                 reason="cash_paid",
@@ -883,7 +884,7 @@ class AccessOrchestrator:
         self,
         *,
         uid: str | None,
-        chip_id: str | None,
+        member_id: str | None,
         reason: str,
         fee: int,
         balance: int | None = None,
@@ -895,8 +896,8 @@ class AccessOrchestrator:
             "fee_cents": fee,
             "ts": datetime.now(timezone.utc).isoformat(),
         }
-        if chip_id:
-            event["chip_id"] = chip_id
+        if member_id:
+            event["member_id"] = member_id
         if balance is not None:
             event["balance_cents"] = balance
         await self._emit(event)

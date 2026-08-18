@@ -47,7 +47,7 @@ class PendingApproval:
 
     approval_id: str
     uid: str
-    chip_id: str
+    member_id: str
     holder_name: str | None
     balance_cents: int
     fee_cents: int
@@ -108,7 +108,7 @@ class PendingApprovalStore:
         self,
         *,
         uid: str,
-        chip_id: str,
+        member_id: str,
         holder_name: str | None,
         balance_cents: int,
         fee_cents: int,
@@ -120,7 +120,7 @@ class PendingApprovalStore:
             approval = PendingApproval(
                 approval_id=secrets.token_urlsafe(12),
                 uid=uid,
-                chip_id=chip_id,
+                member_id=member_id,
                 holder_name=holder_name,
                 balance_cents=balance_cents,
                 fee_cents=fee_cents,
@@ -260,7 +260,7 @@ async def _deny(
     *,
     publish: PublishFn,
     uid: str | None,
-    chip_id: str | None,
+    member_id: str | None,
     reason: str,
     fee_cents: int,
     holder_name: str | None = None,
@@ -269,7 +269,7 @@ async def _deny(
     """Log and announce a denied fingerprint entry."""
     db.add(
         AccessLog(
-            chip_id=chip_id,
+            member_id=member_id,
             uid=uid,
             decision="denied",
             reason=reason,
@@ -284,7 +284,7 @@ async def _deny(
             "type": "access.denied",
             "method": "fingerprint",
             "uid": uid,
-            "chip_id": chip_id,
+            "member_id": member_id,
             "holder_name": holder_name,
             "reason": reason,
             "fee_cents": fee_cents,
@@ -310,7 +310,7 @@ async def process_fingerprint_scan(
     slot: int,
     db: AsyncSession,
     *,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     publish: PublishFn,
     approvals: PendingApprovalStore,
     confidence: int | None = None,
@@ -326,28 +326,28 @@ async def process_fingerprint_scan(
     identify_mode = identify is not None and identify.is_active()
 
     try:
-        chip = await chip_client.validate(uid)
+        member = await member_client.validate(uid)
     except ValueError:
         logger.info("fingerprint_unknown slot=%s identify_mode=%s", slot, identify_mode)
         if identify_mode:
             await _publish_identify_failed(publish, reason="unknown_fingerprint", slot=slot)
             return None
-        await _deny(db, publish=publish, uid=uid, chip_id=None, reason="unknown_fingerprint", fee_cents=fee)
+        await _deny(db, publish=publish, uid=uid, member_id=None, reason="unknown_fingerprint", fee_cents=fee)
         return None
 
-    if not chip.is_enabled:
+    if not member.is_enabled:
         if identify_mode:
-            await _publish_identify_failed(publish, reason="chip_disabled", slot=slot)
+            await _publish_identify_failed(publish, reason="member_disabled", slot=slot)
             return None
         await _deny(
             db,
             publish=publish,
-            uid=chip.uid,
-            chip_id=chip.chip_id,
-            reason="chip_disabled",
+            uid=member.uid,
+            member_id=member.member_id,
+            reason="member_disabled",
             fee_cents=fee,
-            holder_name=chip.holder_name,
-            balance_cents=chip.balance_cents,
+            holder_name=member.holder_name,
+            balance_cents=member.balance_cents,
         )
         return None
 
@@ -355,61 +355,61 @@ async def process_fingerprint_scan(
         logger.info(
             "fingerprint_identified slot=%s uid=%s balance_cents=%s subscription_active=%s",
             slot,
-            chip.uid,
-            chip.balance_cents,
-            chip.subscription_active,
+            member.uid,
+            member.balance_cents,
+            member.subscription_active,
         )
         await publish(
             {
                 "type": "fingerprint.identified",
                 "slot": slot,
-                "uid": chip.uid,
-                "chip_id": chip.chip_id,
-                "holder_name": chip.holder_name,
-                "balance_cents": chip.balance_cents,
-                "subscription_active": chip.subscription_active,
-                "subscription_month_name": chip.subscription_month_name,
-                "subscription_free_entry_available_today": chip.subscription_free_entry_available_today,
-                "current_hebrew_month_name": chip.current_hebrew_month_name,
+                "uid": member.uid,
+                "member_id": member.member_id,
+                "holder_name": member.holder_name,
+                "balance_cents": member.balance_cents,
+                "subscription_active": member.subscription_active,
+                "subscription_month_name": member.subscription_month_name,
+                "subscription_free_entry_available_today": member.subscription_free_entry_available_today,
+                "current_hebrew_month_name": member.current_hebrew_month_name,
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
         )
         return None
 
     use_subscription = (
-        chip.subscription_active and chip.subscription_free_entry_available_today
+        member.subscription_active and member.subscription_free_entry_available_today
     )
     charge_fee = 0 if use_subscription else fee
 
-    if not use_subscription and chip.balance_cents < fee:
+    if not use_subscription and member.balance_cents < fee:
         # Offer top-up choices on the kiosk instead of a dead-end denial toast.
         db.add(
             AccessLog(
-                chip_id=chip.chip_id,
-                uid=chip.uid,
+                member_id=member.member_id,
+                uid=member.uid,
                 decision="denied",
                 reason="insufficient_balance",
                 fee_cents=fee,
-                balance_before_cents=chip.balance_cents,
-                balance_after_cents=chip.balance_cents,
+                balance_before_cents=member.balance_cents,
+                balance_after_cents=member.balance_cents,
             )
         )
         await db.commit()
         logger.info(
             "fingerprint_topup_needed slot=%s uid=%s balance_cents=%s fee_cents=%s",
             slot,
-            chip.uid,
-            chip.balance_cents,
+            member.uid,
+            member.balance_cents,
             fee,
         )
         await publish(
             {
                 "type": "access.topup_needed",
                 "method": "fingerprint",
-                "uid": chip.uid,
-                "chip_id": chip.chip_id,
-                "holder_name": chip.holder_name,
-                "balance_cents": chip.balance_cents,
+                "uid": member.uid,
+                "member_id": member.member_id,
+                "holder_name": member.holder_name,
+                "balance_cents": member.balance_cents,
                 "fee_cents": fee,
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
@@ -417,20 +417,20 @@ async def process_fingerprint_scan(
         return None
 
     approval = await approvals.create(
-        uid=chip.uid,
-        chip_id=chip.chip_id,
-        holder_name=chip.holder_name,
-        balance_cents=chip.balance_cents,
+        uid=member.uid,
+        member_id=member.member_id,
+        holder_name=member.holder_name,
+        balance_cents=member.balance_cents,
         fee_cents=charge_fee,
     )
     logger.info(
         "fingerprint_pending slot=%s uid=%s confidence=%s approval_id=%s "
         "subscription_active=%s subscription_free=%s fee_cents=%s",
         slot,
-        chip.uid,
+        member.uid,
         confidence,
         approval.approval_id,
-        chip.subscription_active,
+        member.subscription_active,
         use_subscription,
         charge_fee,
     )
@@ -440,7 +440,7 @@ async def process_fingerprint_scan(
             "method": "fingerprint",
             "approval_id": approval.approval_id,
             "uid": approval.uid,
-            "chip_id": approval.chip_id,
+            "member_id": approval.member_id,
             "holder_name": approval.holder_name,
             "balance_cents": approval.balance_cents,
             "fee_cents": approval.fee_cents,
@@ -466,7 +466,7 @@ async def process_fingerprint_unmatched(
         db,
         publish=publish,
         uid=None,
-        chip_id=None,
+        member_id=None,
         reason="unknown_fingerprint",
         fee_cents=settings.entrance_fee_cents,
     )
@@ -476,7 +476,7 @@ async def approve_pending(
     approval_id: str,
     db: AsyncSession,
     *,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     hardware_client: HardwareClient,
     publish: PublishFn,
     approvals: PendingApprovalStore,
@@ -488,7 +488,7 @@ async def approve_pending(
     approval = await approvals.consume(approval_id)
     session = cash_session if cash_session is not None else CashSession(timeout_seconds=1)
     orch = AccessOrchestrator(
-        chip_client=chip_client,
+        member_client=member_client,
         hardware_client=hardware_client,
         cash_session=session,
         publish=publish,
@@ -496,7 +496,7 @@ async def approve_pending(
     return await orch.run_fingerprint_approve(
         approval_id=approval_id,
         uid=approval.uid,
-        chip_id=approval.chip_id,
+        member_id=approval.member_id,
         holder_name=approval.holder_name,
         balance_cents=approval.balance_cents,
         fee_cents=approval.fee_cents,
@@ -508,11 +508,11 @@ async def complete_enrollment(
     session_id: str,
     slot: int,
     *,
-    chip_client: FingerprintsClient,
+    member_client: FingerprintsClient,
     publish: PublishFn,
     enrollments: PendingEnrollmentStore,
 ) -> None:
-    """Create (or rename) the virtual chip for a freshly stored template."""
+    """Create (or rename) the virtual member for a freshly stored fingerprint template."""
     session = enrollments.pop(session_id)
     if session is None:
         logger.warning("fingerprint_enroll_session_missing session_id=%s slot=%s", session_id, slot)
@@ -521,25 +521,25 @@ async def complete_enrollment(
     uid = slot_to_uid(slot)
     try:
         try:
-            chip = await chip_client.validate(uid)
-            # Slot reused by the sensor: keep the existing chip and its balance, update identity.
-            await chip_client.rename(
-                chip.chip_id,
+            member = await member_client.validate(uid)
+            # Slot reused by the sensor: keep the existing member and their balance, update identity.
+            await member_client.rename(
+                member.member_id,
                 session.holder_name,
                 national_id=session.national_id,
                 set_national_id=True,
             )
-            chip_id = chip.chip_id
-            balance_cents = chip.balance_cents
+            member_id = member.member_id
+            balance_cents = member.balance_cents
         except ValueError as exc:
             if str(exc) == "national_id_taken":
                 raise
-            await chip_client.register(
+            await member_client.register(
                 uid, holder_name=session.holder_name, national_id=session.national_id
             )
-            chip = await chip_client.validate(uid)
-            chip_id = chip.chip_id
-            balance_cents = chip.balance_cents
+            member = await member_client.validate(uid)
+            member_id = member.member_id
+            balance_cents = member.balance_cents
     except ValueError as exc:
         if str(exc) == "national_id_taken":
             logger.warning(
@@ -560,8 +560,8 @@ async def complete_enrollment(
         raise
 
     if session.initial_amount_cents > 0:
-        balance_cents = await chip_client.adjust_balance(
-            chip_id=chip_id,
+        balance_cents = await member_client.adjust_balance(
+            member_id=member_id,
             delta_cents=session.initial_amount_cents,
             reason="management_topup",
             description="initial fingerprint balance",
@@ -581,7 +581,7 @@ async def complete_enrollment(
             "session_id": session_id,
             "slot": slot,
             "uid": uid,
-            "chip_id": chip_id,
+            "member_id": member_id,
             "holder_name": session.holder_name,
             "national_id": session.national_id,
             "balance_cents": balance_cents,

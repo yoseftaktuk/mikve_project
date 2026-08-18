@@ -23,7 +23,7 @@ from app.settings import settings
 
 @dataclass
 class FakeChip:
-    chip_id: str
+    member_id: str
     uid: str
     balance_cents: int
     is_enabled: bool = True
@@ -65,12 +65,12 @@ class FakeFingerprintsClient:
     async def validate(self, uid: str) -> FakeChip:
         chip = self.chips.get(uid)
         if chip is None:
-            raise ValueError("chip_not_found")
+            raise ValueError("member_not_found")
         return chip
 
     async def adjust_balance(
         self,
-        chip_id: str,
+        member_id: str,
         delta_cents: int,
         reason: str,
         description: str | None = None,
@@ -79,8 +79,8 @@ class FakeFingerprintsClient:
         if idempotency_key:
             for prev in self.adjusts:
                 if prev.get("idempotency_key") == idempotency_key:
-                    return next(c.balance_cents for c in self.chips.values() if c.chip_id == chip_id)
-        chip = next(c for c in self.chips.values() if c.chip_id == chip_id)
+                    return next(c.balance_cents for c in self.chips.values() if c.member_id == member_id)
+        chip = next(c for c in self.chips.values() if c.member_id == member_id)
         new_bal = chip.balance_cents + delta_cents
         if new_bal < 0:
             raise ValueError("insufficient_balance")
@@ -89,12 +89,12 @@ class FakeFingerprintsClient:
         return chip.balance_cents
 
     async def mark_subscription_free_entry(
-        self, chip_id: str, *, idempotency_key: str | None = None
+        self, member_id: str, *, idempotency_key: str | None = None
     ) -> None:
         self.last_free_entry_key = idempotency_key
         if self.fail_free_entry:
             raise ValueError(self.fail_free_entry)
-        self.free_entries.append(chip_id)
+        self.free_entries.append(member_id)
 
 
 class FakeHardwareClient:
@@ -211,9 +211,9 @@ async def test_cash_try_pay_is_atomic_and_idempotent():
 @pytest.mark.asyncio
 async def test_fingerprint_happy_path_charges_with_idempotency_key():
     fee = settings.entrance_fee_cents
-    chip_id = str(uuid.uuid4())
-    chips = {"FP-001": FakeChip(chip_id=chip_id, uid="FP-001", balance_cents=fee * 3)}
-    chip_client = FakeFingerprintsClient(chips)
+    member_id = str(uuid.uuid4())
+    chips = {"FP-001": FakeChip(member_id=member_id, uid="FP-001", balance_cents=fee * 3)}
+    member_client = FakeFingerprintsClient(chips)
     events: list[dict] = []
     db = FakeDb()
     patches = _patch_repo()
@@ -221,7 +221,7 @@ async def test_fingerprint_happy_path_charges_with_idempotency_key():
         p.start()
     try:
         orch = AccessOrchestrator(
-            chip_client=chip_client,  # type: ignore[arg-type]
+            member_client=member_client,  # type: ignore[arg-type]
             hardware_client=FakeHardwareClient(),  # type: ignore[arg-type]
             cash_session=CashSession(timeout_seconds=20),
             publish=events.append,
@@ -229,7 +229,7 @@ async def test_fingerprint_happy_path_charges_with_idempotency_key():
         result = await orch.run_fingerprint_approve(
             approval_id="appr-1",
             uid="FP-001",
-            chip_id=chip_id,
+            member_id=member_id,
             holder_name="Test",
             balance_cents=fee * 3,
             fee_cents=fee,
@@ -237,7 +237,7 @@ async def test_fingerprint_happy_path_charges_with_idempotency_key():
         )
         assert result.granted is True
         assert chips["FP-001"].balance_cents == fee * 2
-        assert chip_client.adjusts[0]["idempotency_key"].startswith("access-charge:")
+        assert member_client.adjusts[0]["idempotency_key"].startswith("access-charge:")
         assert any(e.get("type") == "access.granted" for e in events)
     finally:
         for p in patches:
@@ -246,9 +246,9 @@ async def test_fingerprint_happy_path_charges_with_idempotency_key():
 
 @pytest.mark.asyncio
 async def test_subscription_zero_fee_skips_balance_charge():
-    chip_id = str(uuid.uuid4())
-    chips = {"FP-001": FakeChip(chip_id=chip_id, uid="FP-001", balance_cents=0)}
-    chip_client = FakeFingerprintsClient(chips)
+    member_id = str(uuid.uuid4())
+    chips = {"FP-001": FakeChip(member_id=member_id, uid="FP-001", balance_cents=0)}
+    member_client = FakeFingerprintsClient(chips)
     events: list[dict] = []
     db = FakeDb()
     patches = _patch_repo()
@@ -256,7 +256,7 @@ async def test_subscription_zero_fee_skips_balance_charge():
         p.start()
     try:
         orch = AccessOrchestrator(
-            chip_client=chip_client,  # type: ignore[arg-type]
+            member_client=member_client,  # type: ignore[arg-type]
             hardware_client=FakeHardwareClient(),  # type: ignore[arg-type]
             cash_session=CashSession(timeout_seconds=20),
             publish=events.append,
@@ -264,7 +264,7 @@ async def test_subscription_zero_fee_skips_balance_charge():
         result = await orch.run_fingerprint_approve(
             approval_id="appr-sub",
             uid="FP-001",
-            chip_id=chip_id,
+            member_id=member_id,
             holder_name="Test",
             balance_cents=0,
             fee_cents=0,
@@ -272,9 +272,9 @@ async def test_subscription_zero_fee_skips_balance_charge():
         )
         assert result.granted is True
         assert chips["FP-001"].balance_cents == 0
-        assert chip_client.adjusts == []
-        assert chip_client.free_entries == [chip_id]
-        assert chip_client.last_free_entry_key
+        assert member_client.adjusts == []
+        assert member_client.free_entries == [member_id]
+        assert member_client.last_free_entry_key
         granted = next(e for e in events if e.get("type") == "access.granted")
         assert granted["method"] == "subscription"
         assert granted["fee_cents"] == 0
@@ -285,10 +285,10 @@ async def test_subscription_zero_fee_skips_balance_charge():
 
 @pytest.mark.asyncio
 async def test_subscription_daily_limit_denies_without_door():
-    chip_id = str(uuid.uuid4())
-    chips = {"FP-001": FakeChip(chip_id=chip_id, uid="FP-001", balance_cents=0)}
-    chip_client = FakeFingerprintsClient(chips)
-    chip_client.fail_free_entry = "daily_limit_reached"
+    member_id = str(uuid.uuid4())
+    chips = {"FP-001": FakeChip(member_id=member_id, uid="FP-001", balance_cents=0)}
+    member_client = FakeFingerprintsClient(chips)
+    member_client.fail_free_entry = "daily_limit_reached"
     events: list[dict] = []
     db = FakeDb()
     patches = _patch_repo()
@@ -296,7 +296,7 @@ async def test_subscription_daily_limit_denies_without_door():
         p.start()
     try:
         orch = AccessOrchestrator(
-            chip_client=chip_client,  # type: ignore[arg-type]
+            member_client=member_client,  # type: ignore[arg-type]
             hardware_client=FakeHardwareClient(),  # type: ignore[arg-type]
             cash_session=CashSession(timeout_seconds=20),
             publish=events.append,
@@ -304,7 +304,7 @@ async def test_subscription_daily_limit_denies_without_door():
         result = await orch.run_fingerprint_approve(
             approval_id="appr-limit",
             uid="FP-001",
-            chip_id=chip_id,
+            member_id=member_id,
             holder_name="Test",
             balance_cents=0,
             fee_cents=0,
@@ -312,7 +312,7 @@ async def test_subscription_daily_limit_denies_without_door():
         )
         assert result.granted is False
         assert result.reason == "daily_limit_reached"
-        assert chip_client.free_entries == []
+        assert member_client.free_entries == []
         assert any(e.get("type") == "access.denied" and e.get("reason") == "daily_limit_reached" for e in events)
     finally:
         for p in patches:
@@ -322,9 +322,9 @@ async def test_subscription_daily_limit_denies_without_door():
 @pytest.mark.asyncio
 async def test_fingerprint_door_failure_refunds_balance():
     fee = settings.entrance_fee_cents
-    chip_id = str(uuid.uuid4())
-    chips = {"FP-001": FakeChip(chip_id=chip_id, uid="FP-001", balance_cents=fee * 2)}
-    chip_client = FakeFingerprintsClient(chips)
+    member_id = str(uuid.uuid4())
+    chips = {"FP-001": FakeChip(member_id=member_id, uid="FP-001", balance_cents=fee * 2)}
+    member_client = FakeFingerprintsClient(chips)
     events: list[dict] = []
     db = FakeDb()
     patches = _patch_repo()
@@ -332,7 +332,7 @@ async def test_fingerprint_door_failure_refunds_balance():
         p.start()
     try:
         orch = AccessOrchestrator(
-            chip_client=chip_client,  # type: ignore[arg-type]
+            member_client=member_client,  # type: ignore[arg-type]
             hardware_client=FakeHardwareClient(fail_times=10),  # type: ignore[arg-type]
             cash_session=CashSession(timeout_seconds=20),
             publish=events.append,
@@ -340,7 +340,7 @@ async def test_fingerprint_door_failure_refunds_balance():
         result = await orch.run_fingerprint_approve(
             approval_id="appr-2",
             uid="FP-001",
-            chip_id=chip_id,
+            member_id=member_id,
             holder_name="Test",
             balance_cents=fee * 2,
             fee_cents=fee,
@@ -350,7 +350,7 @@ async def test_fingerprint_door_failure_refunds_balance():
         assert chips["FP-001"].balance_cents == fee * 2
         assert any(e.get("alert") == "DoorFailedAfterCharge" for e in events)
         assert any(e.get("type") == "access.refunded" for e in events)
-        assert any(a["delta_cents"] > 0 for a in chip_client.adjusts)
+        assert any(a["delta_cents"] > 0 for a in member_client.adjusts)
     finally:
         for p in patches:
             p.stop()
@@ -367,7 +367,7 @@ async def test_cash_door_failure_issues_receipt():
         p.start()
     try:
         orch = AccessOrchestrator(
-            chip_client=FakeFingerprintsClient({}),  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({}),  # type: ignore[arg-type]
             hardware_client=FakeHardwareClient(fail_times=10),  # type: ignore[arg-type]
             cash_session=cash,
             publish=events.append,

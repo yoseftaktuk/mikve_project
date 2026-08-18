@@ -16,10 +16,10 @@ class DoorRejectedError(Exception):
 
 
 @dataclass(frozen=True)
-class ChipValidation:
+class MemberValidation:
     """Ledger details returned by the fingerprints-service validate endpoint."""
 
-    chip_id: str
+    member_id: str
     uid: str
     is_enabled: bool
     assigned_user_id: str | None
@@ -36,13 +36,24 @@ class ChipValidation:
 class LedgerUser:
     """Registered ledger user with balance for management lists."""
 
-    chip_id: str
+    member_id: str
     uid: str
     holder_name: str | None
     is_enabled: bool
     balance_cents: int
     national_id: str | None = None
     created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class MemberNationalIdMatch:
+    """Ledger member resolved from a Nedarim Zeout national ID lookup."""
+
+    member_id: str
+    uid: str
+    is_enabled: bool
+    balance_cents: int
+    national_id: str | None = None
 
 
 class FingerprintsClient:
@@ -78,7 +89,7 @@ class FingerprintsClient:
 
     async def rename(
         self,
-        chip_id: str,
+        member_id: str,
         holder_name: str | None,
         *,
         national_id: str | None = None,
@@ -90,7 +101,7 @@ class FingerprintsClient:
             body["national_id"] = national_id
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.patch(
-                f"{self._base}/fingerprints/{chip_id}/name", json=body
+                f"{self._base}/fingerprints/{member_id}/name", json=body
             )
         if resp.status_code == 409:
             raise ValueError("national_id_taken")
@@ -104,7 +115,7 @@ class FingerprintsClient:
         rows = resp.json()
         return [
             LedgerUser(
-                chip_id=str(row["id"]),
+                member_id=str(row["id"]),
                 uid=row["uid"],
                 holder_name=row.get("holder_name"),
                 national_id=row.get("national_id"),
@@ -117,7 +128,7 @@ class FingerprintsClient:
 
     async def update_user(
         self,
-        chip_id: str,
+        member_id: str,
         *,
         holder_name: str | None = None,
         national_id: str | None = None,
@@ -138,9 +149,9 @@ class FingerprintsClient:
         if set_is_enabled:
             body["is_enabled"] = is_enabled
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.patch(f"{self._base}/fingerprints/{chip_id}", json=body)
+            resp = await client.patch(f"{self._base}/fingerprints/{member_id}", json=body)
         if resp.status_code == 404:
-            raise ValueError("chip_not_found")
+            raise ValueError("member_not_found")
         if resp.status_code == 409:
             raise ValueError("national_id_taken")
         if resp.status_code == 400:
@@ -148,7 +159,7 @@ class FingerprintsClient:
         resp.raise_for_status()
         row = resp.json()
         return LedgerUser(
-            chip_id=str(row["id"]),
+            member_id=str(row["id"]),
             uid=row["uid"],
             holder_name=row.get("holder_name"),
             national_id=row.get("national_id"),
@@ -157,28 +168,28 @@ class FingerprintsClient:
             created_at=row.get("created_at"),
         )
 
-    async def delete_user(self, chip_id: str) -> None:
+    async def delete_user(self, member_id: str) -> None:
         """Delete a ledger user and related balance/activity."""
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.delete(f"{self._base}/fingerprints/{chip_id}")
+            resp = await client.delete(f"{self._base}/fingerprints/{member_id}")
         if resp.status_code == 404:
-            raise ValueError("chip_not_found")
+            raise ValueError("member_not_found")
         resp.raise_for_status()
 
-    async def get_by_id(self, chip_id: str) -> LedgerUser | None:
-        """Fetch a single chip by id with balance; None if missing."""
+    async def get_by_id(self, member_id: str) -> LedgerUser | None:
+        """Fetch a single member by id with balance; None if missing."""
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{self._base}/fingerprints/{chip_id}")
+            resp = await client.get(f"{self._base}/fingerprints/{member_id}")
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
             row = resp.json()
-            bal_resp = await client.get(f"{self._base}/fingerprints/{chip_id}/balance")
+            bal_resp = await client.get(f"{self._base}/fingerprints/{member_id}/balance")
             balance_cents = 0
             if bal_resp.status_code == 200:
                 balance_cents = int(bal_resp.json().get("amount_cents") or 0)
         return LedgerUser(
-            chip_id=str(row["id"]),
+            member_id=str(row["id"]),
             uid=row["uid"],
             holder_name=row.get("holder_name"),
             national_id=row.get("national_id"),
@@ -187,16 +198,16 @@ class FingerprintsClient:
             created_at=row.get("created_at"),
         )
 
-    async def validate(self, uid: str) -> ChipValidation:
+    async def validate(self, uid: str) -> MemberValidation:
         """Fetch ledger status and balance by UID."""
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(f"{self._base}/fingerprints/validate", json={"uid": uid})
         if resp.status_code == 404:
-            raise ValueError("chip_not_found")
+            raise ValueError("member_not_found")
         resp.raise_for_status()
         data = resp.json()
-        return ChipValidation(
-            chip_id=str(data["chip_id"]),
+        return MemberValidation(
+            member_id=str(data["member_id"]),
             uid=data["uid"],
             is_enabled=bool(data["is_enabled"]),
             assigned_user_id=data.get("assigned_user_id"),
@@ -213,7 +224,7 @@ class FingerprintsClient:
 
     async def adjust_balance(
         self,
-        chip_id: str,
+        member_id: str,
         delta_cents: int,
         reason: str,
         description: str | None = None,
@@ -225,7 +236,7 @@ class FingerprintsClient:
             body["idempotency_key"] = idempotency_key
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
-                f"{self._base}/fingerprints/{chip_id}/balance/adjust",
+                f"{self._base}/fingerprints/{member_id}/balance/adjust",
                 json=body,
             )
         if resp.status_code == 409:
@@ -234,15 +245,15 @@ class FingerprintsClient:
         return int(resp.json()["amount_cents"])
 
     async def mark_subscription_free_entry(
-        self, chip_id: str, *, idempotency_key: str | None = None
+        self, member_id: str, *, idempotency_key: str | None = None
     ) -> None:
-        """Record today's free subscription entrance for the chip."""
+        """Record today's free subscription entrance for the member."""
         body: dict = {}
         if idempotency_key:
             body["idempotency_key"] = idempotency_key
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
-                f"{self._base}/fingerprints/{chip_id}/subscriptions/mark-free-entry",
+                f"{self._base}/fingerprints/{member_id}/subscriptions/mark-free-entry",
                 json=body or None,
             )
         if resp.status_code == 409:
@@ -255,8 +266,29 @@ class FingerprintsClient:
                 code = "daily_limit_reached"
             raise ValueError(code)
         if resp.status_code == 404:
-            raise ValueError("chip_not_found")
+            raise ValueError("member_not_found")
         resp.raise_for_status()
+
+    async def lookup_by_national_id(self, national_id: str) -> MemberNationalIdMatch:
+        """Resolve exactly one member by national ID."""
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                f"{self._base}/fingerprints/lookup-by-national-id",
+                json={"national_id": national_id},
+            )
+        if resp.status_code == 404:
+            raise ValueError("member_not_found")
+        if resp.status_code == 409:
+            raise ValueError("national_id_ambiguous")
+        resp.raise_for_status()
+        data = resp.json()
+        return MemberNationalIdMatch(
+            member_id=str(data["member_id"]),
+            uid=data["uid"],
+            is_enabled=bool(data["is_enabled"]),
+            balance_cents=int(data["balance_cents"]),
+            national_id=data.get("national_id"),
+        )
 
 
 class HardwareClient:

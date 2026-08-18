@@ -53,7 +53,7 @@ Compensation path: after charge + door failure → `FAILED` → `REFUND_PENDING`
 | From | To | Reason examples | Notes |
 |------|----|-----------------|-------|
 | `CREATED` | `VALIDATED` | `chip_ok`, `cash_enough`, `fp_approved` | |
-| `CREATED` | `FAILED` | `unknown_chip`, `chip_disabled`, `insufficient_balance`, `invalid_amount` | `charge_taken=false` |
+| `CREATED` | `FAILED` | `unknown_chip`, `member_disabled`, `insufficient_balance`, `invalid_amount` | `charge_taken=false` |
 | `VALIDATED` | `CHARGED` | `ledger_charge_ok`, `cash_take_ok` | Set `charge_taken=true` |
 | `VALIDATED` | `FAILED` | `insufficient_race`, `ledger_unavailable` | `charge_taken=false` |
 | `CHARGED` | `DOOR_OPENING` | `door_request_sent` | First door try |

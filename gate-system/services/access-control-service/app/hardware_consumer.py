@@ -28,7 +28,7 @@ class HardwareEventConsumer:
         self,
         redis_url: str,
         *,
-        chip_client: FingerprintsClient,
+        member_client: FingerprintsClient,
         hardware_client: HardwareClient,
         cash_session: CashSession,
         publish,
@@ -37,7 +37,7 @@ class HardwareEventConsumer:
         identify: TopupIdentifyStore,
     ) -> None:
         self._redis_url = redis_url
-        self._chip_client = chip_client
+        self._member_client = member_client
         self._hardware_client = hardware_client
         self._cash_session = cash_session
         self._publish = publish
@@ -102,7 +102,7 @@ class HardwareEventConsumer:
                         cash_session=self._cash_session,
                         hardware_client=self._hardware_client,
                         publish=self._publish,
-                        chip_client=self._chip_client,
+                        member_client=self._member_client,
                     )
                 return
 
@@ -114,7 +114,7 @@ class HardwareEventConsumer:
                     await process_fingerprint_scan(
                         int(slot),
                         db,
-                        chip_client=self._chip_client,
+                        member_client=self._member_client,
                         publish=self._publish,
                         approvals=self._approvals,
                         confidence=event.get("confidence"),
@@ -137,7 +137,7 @@ class HardwareEventConsumer:
                 await complete_enrollment(
                     str(session_id),
                     int(slot),
-                    chip_client=self._chip_client,
+                    member_client=self._member_client,
                     publish=self._publish,
                     enrollments=self._enrollments,
                 )

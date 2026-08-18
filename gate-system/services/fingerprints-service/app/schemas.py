@@ -18,7 +18,7 @@ def _optional_national_id(value: str | None) -> str | None:
         raise ValueError("invalid_national_id") from exc
 
 
-class ChipCreateRequest(BaseModel):
+class MemberCreateRequest(BaseModel):
     uid: str = Field(min_length=4, max_length=64)
     holder_name: str | None = Field(default=None, max_length=80)
     national_id: str | None = Field(default=None, max_length=9)
@@ -29,11 +29,11 @@ class ChipCreateRequest(BaseModel):
         return _optional_national_id(value)
 
 
-class ChipAssignRequest(BaseModel):
+class MemberAssignRequest(BaseModel):
     user_id: uuid.UUID | None = None
 
 
-class ChipRenameRequest(BaseModel):
+class MemberRenameRequest(BaseModel):
     holder_name: str | None = Field(default=None, max_length=80)
     national_id: str | None = Field(default=None, max_length=9)
 
@@ -43,7 +43,7 @@ class ChipRenameRequest(BaseModel):
         return _optional_national_id(value)
 
 
-class ChipUpdateRequest(BaseModel):
+class MemberUpdateRequest(BaseModel):
     holder_name: str | None = Field(default=None, max_length=80)
     national_id: str | None = Field(default=None, max_length=9)
     is_enabled: bool | None = None
@@ -54,7 +54,7 @@ class ChipUpdateRequest(BaseModel):
         return _optional_national_id(value)
 
 
-class ChipResponse(BaseModel):
+class MemberResponse(BaseModel):
     id: uuid.UUID
     uid: str
     holder_name: str | None
@@ -64,7 +64,7 @@ class ChipResponse(BaseModel):
     created_at: datetime
 
 
-class ChipListItemResponse(BaseModel):
+class MemberListItemResponse(BaseModel):
     id: uuid.UUID
     uid: str
     holder_name: str | None
@@ -75,7 +75,7 @@ class ChipListItemResponse(BaseModel):
 
 
 class BalanceResponse(BaseModel):
-    chip_id: uuid.UUID
+    member_id: uuid.UUID
     amount_cents: int
     updated_at: datetime
 
@@ -96,19 +96,19 @@ class LookupByNationalIdRequest(BaseModel):
 
 
 class LookupByNationalIdResponse(BaseModel):
-    chip_id: uuid.UUID
+    member_id: uuid.UUID
     uid: str
     is_enabled: bool
     balance_cents: int
     national_id: str | None = None
 
 
-class ValidateChipRequest(BaseModel):
+class ValidateMemberRequest(BaseModel):
     uid: str = Field(min_length=4, max_length=64)
 
 
-class ValidateChipResponse(BaseModel):
-    chip_id: uuid.UUID
+class ValidateMemberResponse(BaseModel):
+    member_id: uuid.UUID
     uid: str
     holder_name: str | None = None
     national_id: str | None = None
@@ -136,7 +136,7 @@ class MarkFreeEntryRequest(BaseModel):
 
 
 class SubscriptionResponse(BaseModel):
-    chip_id: uuid.UUID
+    member_id: uuid.UUID
     hebrew_year: int
     hebrew_month: int
     hebrew_month_name: str
@@ -150,9 +150,9 @@ class SubscriptionResponse(BaseModel):
     current_hebrew_month_name: str
 
 
-class ChipActivityResponse(BaseModel):
+class MemberActivityResponse(BaseModel):
     id: int
-    chip_id: uuid.UUID
+    member_id: uuid.UUID
     event_type: str
     delta_cents: int
     description: str | None

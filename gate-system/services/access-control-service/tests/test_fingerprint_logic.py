@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from app.clients import ChipValidation
+from app.clients import MemberValidation
 from app.fingerprint_logic import (
     PendingApprovalStore,
     PendingEnrollmentStore,
@@ -22,7 +22,7 @@ from app.settings import settings
 FEE = settings.entrance_fee_cents
 
 
-def chip_id_for(uid: str) -> str:
+def member_id_for(uid: str) -> str:
     """Chip ids are UUIDs in fingerprints-service, so fakes must look the same."""
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, uid))
 
@@ -56,57 +56,57 @@ class FakeDb:
 
 
 class FakeFingerprintsClient:
-    def __init__(self, chips: dict[str, ChipValidation] | None = None) -> None:
-        self.chips = chips or {}
-        self.balances: dict[str, int] = {c.chip_id: c.balance_cents for c in self.chips.values()}
+    def __init__(self, members: dict[str, MemberValidation] | None = None) -> None:
+        self.chips = members or {}
+        self.balances: dict[str, int] = {m.member_id: m.balance_cents for m in self.chips.values()}
         self.registered: list[tuple[str, str | None]] = []
         self.renamed: list[tuple[str, str | None]] = []
         self.adjustments: list[tuple[str, int, str]] = []
 
-    async def validate(self, uid: str) -> ChipValidation:
+    async def validate(self, uid: str) -> MemberValidation:
         if uid not in self.chips:
-            raise ValueError("chip_not_found")
-        chip = self.chips[uid]
-        return ChipValidation(
-            chip_id=chip.chip_id,
-            uid=chip.uid,
-            is_enabled=chip.is_enabled,
-            assigned_user_id=chip.assigned_user_id,
-            balance_cents=self.balances[chip.chip_id],
-            holder_name=chip.holder_name,
-            subscription_active=chip.subscription_active,
-            subscription_month_name=chip.subscription_month_name,
-            subscription_free_entry_available_today=chip.subscription_free_entry_available_today,
-            current_hebrew_month_name=chip.current_hebrew_month_name,
+            raise ValueError("member_not_found")
+        member = self.chips[uid]
+        return MemberValidation(
+            member_id=member.member_id,
+            uid=member.uid,
+            is_enabled=member.is_enabled,
+            assigned_user_id=member.assigned_user_id,
+            balance_cents=self.balances[member.member_id],
+            holder_name=member.holder_name,
+            subscription_active=member.subscription_active,
+            subscription_month_name=member.subscription_month_name,
+            subscription_free_entry_available_today=member.subscription_free_entry_available_today,
+            current_hebrew_month_name=member.current_hebrew_month_name,
         )
 
     async def mark_subscription_free_entry(
-        self, chip_id: str, *, idempotency_key: str | None = None
+        self, member_id: str, *, idempotency_key: str | None = None
     ) -> None:
-        for uid, chip in self.chips.items():
-            if chip.chip_id == chip_id:
-                self.chips[uid] = ChipValidation(
-                    chip_id=chip.chip_id,
-                    uid=chip.uid,
-                    is_enabled=chip.is_enabled,
-                    assigned_user_id=chip.assigned_user_id,
-                    balance_cents=self.balances[chip.chip_id],
-                    holder_name=chip.holder_name,
-                    subscription_active=chip.subscription_active,
-                    subscription_month_name=chip.subscription_month_name,
+        for uid, member in self.chips.items():
+            if member.member_id == member_id:
+                self.chips[uid] = MemberValidation(
+                    member_id=member.member_id,
+                    uid=member.uid,
+                    is_enabled=member.is_enabled,
+                    assigned_user_id=member.assigned_user_id,
+                    balance_cents=self.balances[member.member_id],
+                    holder_name=member.holder_name,
+                    subscription_active=member.subscription_active,
+                    subscription_month_name=member.subscription_month_name,
                     subscription_free_entry_available_today=False,
-                    current_hebrew_month_name=chip.current_hebrew_month_name,
+                    current_hebrew_month_name=member.current_hebrew_month_name,
                 )
                 return
-        raise ValueError("chip_not_found")
+        raise ValueError("member_not_found")
 
     async def register(
         self, uid: str, holder_name: str | None = None, national_id: str | None = None
     ) -> None:
         self.registered.append((uid, holder_name, national_id))
-        chip_id = chip_id_for(uid)
-        self.chips[uid] = ChipValidation(
-            chip_id=chip_id,
+        mid = member_id_for(uid)
+        self.chips[uid] = MemberValidation(
+            member_id=mid,
             uid=uid,
             is_enabled=True,
             assigned_user_id=None,
@@ -114,54 +114,51 @@ class FakeFingerprintsClient:
             holder_name=holder_name,
             national_id=national_id,
         )
-        self.balances[chip_id] = 0
+        self.balances[mid] = 0
 
     async def rename(
         self,
-        chip_id: str,
+        member_id: str,
         holder_name: str | None,
         *,
         national_id: str | None = None,
         set_national_id: bool = False,
     ) -> None:
-        self.renamed.append((chip_id, holder_name, national_id if set_national_id else None))
-        for uid, chip in list(self.chips.items()):
-            if chip.chip_id == chip_id:
-                self.chips[uid] = ChipValidation(
-                    chip_id=chip.chip_id,
-                    uid=chip.uid,
-                    is_enabled=chip.is_enabled,
-                    assigned_user_id=chip.assigned_user_id,
-                    balance_cents=self.balances[chip.chip_id],
+        self.renamed.append((member_id, holder_name, national_id if set_national_id else None))
+        for uid, member in list(self.chips.items()):
+            if member.member_id == member_id:
+                self.chips[uid] = MemberValidation(
+                    member_id=member.member_id,
+                    uid=member.uid,
+                    is_enabled=member.is_enabled,
+                    assigned_user_id=member.assigned_user_id,
+                    balance_cents=self.balances[member.member_id],
                     holder_name=holder_name,
-                    national_id=national_id if set_national_id else chip.national_id,
-                    subscription_active=chip.subscription_active,
-                    subscription_month_name=chip.subscription_month_name,
-                    subscription_free_entry_available_today=chip.subscription_free_entry_available_today,
-                    current_hebrew_month_name=chip.current_hebrew_month_name,
+                    national_id=national_id if set_national_id else member.national_id,
+                    subscription_active=member.subscription_active,
+                    subscription_month_name=member.subscription_month_name,
+                    subscription_free_entry_available_today=member.subscription_free_entry_available_today,
+                    current_hebrew_month_name=member.current_hebrew_month_name,
                 )
                 return
 
     async def adjust_balance(
         self,
-        chip_id: str,
+        member_id: str,
         delta_cents: int,
         reason: str,
         description: str | None = None,
         idempotency_key: str | None = None,
     ) -> int:
         if idempotency_key:
-            for prev in self.adjustments:
-                # previous tuples are (chip_id, delta, reason) — treat same key as no-op
-                pass
             for key, bal in list(getattr(self, "_idempotency", {}).items()):
                 if key == idempotency_key:
                     return bal
-        new_balance = self.balances[chip_id] + delta_cents
+        new_balance = self.balances[member_id] + delta_cents
         if new_balance < 0:
             raise ValueError("insufficient_balance")
-        self.balances[chip_id] = new_balance
-        self.adjustments.append((chip_id, delta_cents, reason))
+        self.balances[member_id] = new_balance
+        self.adjustments.append((member_id, delta_cents, reason))
         if idempotency_key:
             self._idempotency = getattr(self, "_idempotency", {})
             self._idempotency[idempotency_key] = new_balance
@@ -203,9 +200,9 @@ def chip(
     subscription_free_entry_available_today: bool = False,
     subscription_month_name: str | None = None,
     current_hebrew_month_name: str | None = "אב",
-) -> ChipValidation:
-    return ChipValidation(
-        chip_id=chip_id_for(uid),
+) -> MemberValidation:
+    return MemberValidation(
+        member_id=member_id_for(uid),
         uid=uid,
         is_enabled=is_enabled,
         assigned_user_id=None,
@@ -231,39 +228,39 @@ def test_uid_to_slot_ignores_other_uids():
 
 async def test_scan_publishes_pending_without_charging():
     uid = slot_to_uid(3)
-    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
+    member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
     db = FakeDb()
 
     approval = await process_fingerprint_scan(
-        3, db, chip_client=chip_client, publish=publish, approvals=approvals, confidence=90
+        3, db, member_client=member_client, publish=publish, approvals=approvals, confidence=90
     )
 
     assert approval is not None
     assert publish.types() == ["access.pending"]
     assert publish.last()["holder_name"] == "דנה"
     assert publish.last()["fee_cents"] == FEE
-    assert chip_client.adjustments == []
+    assert member_client.adjustments == []
 
 
 @pytest.mark.parametrize(
     ("chips", "reason"),
     [
         ({}, "unknown_fingerprint"),
-        ({slot_to_uid(5): chip(slot_to_uid(5), balance_cents=FEE, is_enabled=False)}, "chip_disabled"),
+        ({slot_to_uid(5): chip(slot_to_uid(5), balance_cents=FEE, is_enabled=False)}, "member_disabled"),
     ],
 )
 async def test_scan_denials(chips: dict, reason: str):
-    chip_client = FakeFingerprintsClient(chips)
+    member_client = FakeFingerprintsClient(chips)
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
     db = FakeDb()
 
     approval = await process_fingerprint_scan(
-        5, db, chip_client=chip_client, publish=publish, approvals=approvals
+        5, db, member_client=member_client, publish=publish, approvals=approvals
     )
 
     assert approval is None
@@ -276,14 +273,14 @@ async def test_scan_denials(chips: dict, reason: str):
 
 async def test_scan_insufficient_balance_offers_topup():
     uid = slot_to_uid(5)
-    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE - 1)})
+    member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE - 1)})
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
     db = FakeDb()
 
     approval = await process_fingerprint_scan(
-        5, db, chip_client=chip_client, publish=publish, approvals=approvals
+        5, db, member_client=member_client, publish=publish, approvals=approvals
     )
 
     assert approval is None
@@ -299,7 +296,7 @@ async def test_approve_charges_once_and_opens_door():
     from tests.test_access_saga import _patch_repo
 
     uid = slot_to_uid(9)
-    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 3)})
+    member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 3)})
     hardware_client = FakeHardwareClient()
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
@@ -307,7 +304,7 @@ async def test_approve_charges_once_and_opens_door():
     db = FakeDb()
 
     approval = await process_fingerprint_scan(
-        9, db, chip_client=chip_client, publish=publish, approvals=approvals
+        9, db, member_client=member_client, publish=publish, approvals=approvals
     )
     assert approval is not None
 
@@ -318,7 +315,7 @@ async def test_approve_charges_once_and_opens_door():
         decision = await approve_pending(
             approval.approval_id,
             db,
-            chip_client=chip_client,
+            member_client=member_client,
             hardware_client=hardware_client,
             publish=publish,
             approvals=approvals,
@@ -329,7 +326,7 @@ async def test_approve_charges_once_and_opens_door():
 
     assert decision.granted is True
     assert hardware_client.door_opens == 1
-    assert chip_client.adjustments == [(chip_id_for(uid), -FEE, "entry_fee")]
+    assert member_client.adjustments == [(member_id_for(uid), -FEE, "entry_fee")]
     assert publish.types() == ["access.pending", "access.granted"]
 
     # A second confirmation of the same scan must not charge again.
@@ -337,12 +334,12 @@ async def test_approve_charges_once_and_opens_door():
         await approve_pending(
             approval.approval_id,
             db,
-            chip_client=chip_client,
+            member_client=member_client,
             hardware_client=hardware_client,
             publish=publish,
             approvals=approvals,
         )
-    assert chip_client.adjustments == [(chip_id_for(uid), -FEE, "entry_fee")]
+    assert member_client.adjustments == [(member_id_for(uid), -FEE, "entry_fee")]
     assert hardware_client.door_opens == 1
 
 
@@ -352,7 +349,7 @@ async def test_approval_expires_and_publishes_cleared():
     approvals.set_publish(publish)
 
     approval = await approvals.create(
-        uid=slot_to_uid(1), chip_id=chip_id_for("FP-001"), holder_name="דנה", balance_cents=FEE, fee_cents=FEE
+        uid=slot_to_uid(1), member_id=member_id_for("FP-001"), holder_name="דנה", balance_cents=FEE, fee_cents=FEE
     )
     await asyncio.sleep(1.1)
 
@@ -370,10 +367,10 @@ async def test_new_scan_replaces_previous_approval():
     approvals.set_publish(publish)
 
     first = await approvals.create(
-        uid=slot_to_uid(1), chip_id=chip_id_for("FP-001"), holder_name="א", balance_cents=FEE, fee_cents=FEE
+        uid=slot_to_uid(1), member_id=member_id_for("FP-001"), holder_name="א", balance_cents=FEE, fee_cents=FEE
     )
     second = await approvals.create(
-        uid=slot_to_uid(2), chip_id=chip_id_for("FP-002"), holder_name="ב", balance_cents=FEE, fee_cents=FEE
+        uid=slot_to_uid(2), member_id=member_id_for("FP-002"), holder_name="ב", balance_cents=FEE, fee_cents=FEE
     )
 
     assert publish.types() == ["access.pending_cleared"]
@@ -387,7 +384,7 @@ async def test_cancel_clears_only_matching_approval():
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(Recorder())
     approval = await approvals.create(
-        uid=slot_to_uid(4), chip_id=chip_id_for("FP-004"), holder_name=None, balance_cents=FEE, fee_cents=FEE
+        uid=slot_to_uid(4), member_id=member_id_for("FP-004"), holder_name=None, balance_cents=FEE, fee_cents=FEE
     )
 
     assert await approvals.clear("some-other-id", reason="cancelled") is False
@@ -397,7 +394,7 @@ async def test_cancel_clears_only_matching_approval():
 
 
 async def test_complete_enrollment_creates_named_chip_with_initial_balance():
-    chip_client = FakeFingerprintsClient()
+    member_client = FakeFingerprintsClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(
@@ -405,11 +402,11 @@ async def test_complete_enrollment_creates_named_chip_with_initial_balance():
     )
 
     await complete_enrollment(
-        session.session_id, 12, chip_client=chip_client, publish=publish, enrollments=enrollments
+        session.session_id, 12, member_client=member_client, publish=publish, enrollments=enrollments
     )
 
-    assert chip_client.registered == [("FP-012", "דנה כהן", "123456782")]
-    assert chip_client.balances[chip_id_for("FP-012")] == 5000
+    assert member_client.registered == [("FP-012", "דנה כהן", "123456782")]
+    assert member_client.balances[member_id_for("FP-012")] == 5000
     assert publish.types() == ["fingerprint.registered"]
     assert publish.last()["uid"] == "FP-012"
     assert publish.last()["balance_cents"] == 5000
@@ -418,31 +415,31 @@ async def test_complete_enrollment_creates_named_chip_with_initial_balance():
 
 async def test_complete_enrollment_renames_when_sensor_reuses_slot():
     uid = slot_to_uid(2)
-    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=1200, holder_name="שם קודם")})
+    member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=1200, holder_name="שם קודם")})
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(holder_name="שם חדש", national_id="123456782")
 
     await complete_enrollment(
-        session.session_id, 2, chip_client=chip_client, publish=publish, enrollments=enrollments
+        session.session_id, 2, member_client=member_client, publish=publish, enrollments=enrollments
     )
 
-    assert chip_client.registered == []
-    assert chip_client.renamed == [(chip_id_for(uid), "שם חדש", "123456782")]
+    assert member_client.registered == []
+    assert member_client.renamed == [(member_id_for(uid), "שם חדש", "123456782")]
     assert publish.last()["balance_cents"] == 1200
     assert publish.last()["national_id"] == "123456782"
 
 
 async def test_complete_enrollment_ignores_unknown_session():
-    chip_client = FakeFingerprintsClient()
+    member_client = FakeFingerprintsClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
 
     await complete_enrollment(
-        "missing-session", 3, chip_client=chip_client, publish=publish, enrollments=enrollments
+        "missing-session", 3, member_client=member_client, publish=publish, enrollments=enrollments
     )
 
-    assert chip_client.registered == []
+    assert member_client.registered == []
     assert publish.events == []
 
 
@@ -455,20 +452,20 @@ def test_enrollment_session_is_consumed_once():
 
 
 async def test_complete_enrollment_fails_when_national_id_taken():
-    chip_client = FakeFingerprintsClient()
+    member_client = FakeFingerprintsClient()
 
     async def register_taken(
         uid: str, holder_name: str | None = None, national_id: str | None = None
     ) -> None:
         raise ValueError("national_id_taken")
 
-    chip_client.register = register_taken  # type: ignore[method-assign]
+    member_client.register = register_taken  # type: ignore[method-assign]
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(holder_name="דנה", national_id="123456782")
 
     await complete_enrollment(
-        session.session_id, 5, chip_client=chip_client, publish=publish, enrollments=enrollments
+        session.session_id, 5, member_client=member_client, publish=publish, enrollments=enrollments
     )
 
     assert publish.types() == ["fingerprint.enroll_progress"]
@@ -478,7 +475,7 @@ async def test_complete_enrollment_fails_when_national_id_taken():
 
 async def test_identify_mode_publishes_identified_without_pending():
     uid = slot_to_uid(3)
-    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
+    member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
@@ -489,7 +486,7 @@ async def test_identify_mode_publishes_identified_without_pending():
     approval = await process_fingerprint_scan(
         3,
         db,
-        chip_client=chip_client,
+        member_client=member_client,
         publish=publish,
         approvals=approvals,
         identify=identify,
@@ -501,12 +498,12 @@ async def test_identify_mode_publishes_identified_without_pending():
     assert publish.last()["uid"] == uid
     assert publish.last()["holder_name"] == "דנה"
     assert publish.last()["balance_cents"] == FEE * 2
-    assert chip_client.adjustments == []
+    assert member_client.adjustments == []
 
 
 async def test_identify_mode_low_balance_still_identifies():
     uid = slot_to_uid(5)
-    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE - 1)})
+    member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE - 1)})
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     identify = TopupIdentifyStore()
@@ -516,7 +513,7 @@ async def test_identify_mode_low_balance_still_identifies():
     approval = await process_fingerprint_scan(
         5,
         db,
-        chip_client=chip_client,
+        member_client=member_client,
         publish=publish,
         approvals=approvals,
         identify=identify,
@@ -538,7 +535,7 @@ async def test_identify_mode_unknown_publishes_identify_failed():
     approval = await process_fingerprint_scan(
         8,
         db,
-        chip_client=FakeFingerprintsClient(),
+        member_client=FakeFingerprintsClient(),
         publish=publish,
         approvals=approvals,
         identify=identify,
@@ -565,7 +562,7 @@ async def test_identify_mode_unmatched_publishes_identify_failed():
 
 async def test_identify_inactive_restores_entrance_pending():
     uid = slot_to_uid(3)
-    chip_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
+    member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=FEE * 2)})
     publish = Recorder()
     approvals = PendingApprovalStore(timeout_seconds=25)
     approvals.set_publish(publish)
@@ -575,7 +572,7 @@ async def test_identify_inactive_restores_entrance_pending():
     approval = await process_fingerprint_scan(
         3,
         db,
-        chip_client=chip_client,
+        member_client=member_client,
         publish=publish,
         approvals=approvals,
         identify=identify,
@@ -587,7 +584,7 @@ async def test_identify_inactive_restores_entrance_pending():
 
 async def test_subscription_free_entry_pending_with_zero_fee():
     uid = slot_to_uid(8)
-    chip_client = FakeFingerprintsClient(
+    member_client = FakeFingerprintsClient(
         {
             uid: chip(
                 uid,
@@ -604,7 +601,7 @@ async def test_subscription_free_entry_pending_with_zero_fee():
     db = FakeDb()
 
     approval = await process_fingerprint_scan(
-        8, db, chip_client=chip_client, publish=publish, approvals=approvals
+        8, db, member_client=member_client, publish=publish, approvals=approvals
     )
 
     assert approval is not None
@@ -615,7 +612,7 @@ async def test_subscription_free_entry_pending_with_zero_fee():
 
 async def test_subscription_used_today_requires_balance():
     uid = slot_to_uid(8)
-    chip_client = FakeFingerprintsClient(
+    member_client = FakeFingerprintsClient(
         {
             uid: chip(
                 uid,
@@ -630,7 +627,7 @@ async def test_subscription_used_today_requires_balance():
     db = FakeDb()
 
     approval = await process_fingerprint_scan(
-        8, db, chip_client=chip_client, publish=publish, approvals=approvals
+        8, db, member_client=member_client, publish=publish, approvals=approvals
     )
 
     assert approval is None
@@ -639,7 +636,7 @@ async def test_subscription_used_today_requires_balance():
 
 async def test_identify_includes_subscription_fields():
     uid = slot_to_uid(3)
-    chip_client = FakeFingerprintsClient(
+    member_client = FakeFingerprintsClient(
         {
             uid: chip(
                 uid,
@@ -659,7 +656,7 @@ async def test_identify_includes_subscription_fields():
     await process_fingerprint_scan(
         3,
         db,
-        chip_client=chip_client,
+        member_client=member_client,
         publish=publish,
         approvals=approvals,
         identify=identify,

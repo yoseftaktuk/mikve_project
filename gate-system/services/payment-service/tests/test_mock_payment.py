@@ -28,7 +28,7 @@ async def test_create_card_topup_mock_without_public_url(monkeypatch: pytest.Mon
         fingerprint_uid=chip.uid,
         amount_cents=2000,
         db=db,  # type: ignore[arg-type]
-        chip_client=CreateFakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        member_client=CreateFakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
         payment_provider=provider,  # type: ignore[arg-type]
     )
 
@@ -46,18 +46,18 @@ async def test_simulate_pay_credits_balance(monkeypatch: pytest.MonkeyPatch) -> 
     topup = pending_topup(amount_cents=2000, created_id="MOCK-pay-1")
     db.add(topup)
 
-    chip_client = FakeFingerprintsClient(balance=100)
+    member_client = FakeFingerprintsClient(balance=100)
     result = await simulate_mock_card_payment(
         topup_id=topup.id,
         db=db,  # type: ignore[arg-type]
-        chip_client=chip_client,  # type: ignore[arg-type]
+        member_client=member_client,  # type: ignore[arg-type]
     )
 
     assert result.accepted is True
     stored = db.topups[topup.id]
     assert stored.status == STATUS_PAID
     assert stored.balance_after_cents == 2100
-    assert len(chip_client.adjustments) == 1
+    assert len(member_client.adjustments) == 1
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_simulate_pay_rejected_in_nedarim_mode(monkeypatch: pytest.MonkeyP
     result = await simulate_mock_card_payment(
         topup_id=topup.id,
         db=db,  # type: ignore[arg-type]
-        chip_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
+        member_client=FakeFingerprintsClient(),  # type: ignore[arg-type]
     )
 
     assert result.accepted is False
@@ -87,19 +87,19 @@ async def test_simulate_pay_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     topup = pending_topup(amount_cents=5000, created_id="MOCK-idem")
     db.add(topup)
 
-    chip_client = FakeFingerprintsClient(balance=0)
+    member_client = FakeFingerprintsClient(balance=0)
     first = await simulate_mock_card_payment(
         topup_id=topup.id,
         db=db,  # type: ignore[arg-type]
-        chip_client=chip_client,  # type: ignore[arg-type]
+        member_client=member_client,  # type: ignore[arg-type]
     )
     second = await simulate_mock_card_payment(
         topup_id=topup.id,
         db=db,  # type: ignore[arg-type]
-        chip_client=chip_client,  # type: ignore[arg-type]
+        member_client=member_client,  # type: ignore[arg-type]
     )
 
     assert first.accepted is True
     assert second.accepted is True
     assert second.code == "already_paid"
-    assert len(chip_client.adjustments) == 1
+    assert len(member_client.adjustments) == 1

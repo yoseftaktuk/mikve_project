@@ -6,30 +6,29 @@ import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from gate_shared.errors import AppError, ErrorResponse
 from gate_shared.logging import configure_logging
 
 from .db import engine, get_db
-from .models import Balance, Base, Chip, ChipActivity, MonthlySubscription
+from .models import Balance, Base, Member, MemberActivity, MonthlySubscription
 from .schemas import (
     ActivateSubscriptionRequest,
     AdjustBalanceRequest,
     BalanceResponse,
-    ChipActivityResponse,
-    ChipAssignRequest,
-    ChipCreateRequest,
-    ChipListItemResponse,
-    ChipRenameRequest,
-    ChipResponse,
-    ChipUpdateRequest,
+    MemberActivityResponse,
+    MemberAssignRequest,
+    MemberCreateRequest,
+    MemberListItemResponse,
+    MemberRenameRequest,
+    MemberResponse,
+    MemberUpdateRequest,
     LookupByNationalIdRequest,
     LookupByNationalIdResponse,
     MarkFreeEntryRequest,
     SubscriptionResponse,
-    ValidateChipRequest,
-    ValidateChipResponse,
+    ValidateMemberRequest,
+    ValidateMemberResponse,
 )
 from .settings import settings
 from .subscription_logic import activate_subscription, mark_free_entry, subscription_snapshot
@@ -68,28 +67,106 @@ async def startup() -> None:
             """
         )
         await conn.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {settings.postgres_schema}")
+        # Rename tables from old chip-era names if they still exist.
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = '{settings.postgres_schema}' AND table_name = 'chips'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = '{settings.postgres_schema}' AND table_name = 'members'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.chips RENAME TO members';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = '{settings.postgres_schema}' AND table_name = 'chip_activity'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = '{settings.postgres_schema}' AND table_name = 'member_activity'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.chip_activity RENAME TO member_activity';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'balances'
+                  AND column_name = 'chip_id'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.balances RENAME COLUMN chip_id TO member_id';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'member_activity'
+                  AND column_name = 'chip_id'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.member_activity RENAME COLUMN chip_id TO member_id';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'monthly_subscriptions'
+                  AND column_name = 'chip_id'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.monthly_subscriptions RENAME COLUMN chip_id TO member_id';
+              END IF;
+            END $$;
+            """
+        )
         await conn.run_sync(Base.metadata.create_all)
         # The project has no migration tool, so databases created before holder_name
         # existed need this idempotent catch-up.
         await conn.exec_driver_sql(
-            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.chips "
+            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.members "
             "ADD COLUMN IF NOT EXISTS holder_name varchar(80)"
         )
         await conn.exec_driver_sql(
-            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.chips "
+            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.members "
             "ADD COLUMN IF NOT EXISTS national_id varchar(9)"
         )
         await conn.exec_driver_sql(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS chips_national_id_key "
-            f"ON {settings.postgres_schema}.chips (national_id)"
+            f"CREATE UNIQUE INDEX IF NOT EXISTS members_national_id_key "
+            f"ON {settings.postgres_schema}.members (national_id)"
         )
         await conn.exec_driver_sql(
-            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.chip_activity "
+            f"ALTER TABLE IF EXISTS {settings.postgres_schema}.member_activity "
             "ADD COLUMN IF NOT EXISTS idempotency_key varchar(80)"
         )
         await conn.exec_driver_sql(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS chip_activity_idempotency_key_key "
-            f"ON {settings.postgres_schema}.chip_activity (idempotency_key)"
+            f"CREATE UNIQUE INDEX IF NOT EXISTS member_activity_idempotency_key_key "
+            f"ON {settings.postgres_schema}.member_activity (idempotency_key)"
         )
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     logger.info("startup_complete")
@@ -119,21 +196,21 @@ async def healthz():
 
 
 async def _publish(event: dict) -> None:
-    """Publish a chip event to Redis pub/sub."""
+    """Publish a member event to Redis pub/sub."""
     if redis_client is None:
         return
-    await redis_client.publish("chip.events", json.dumps(event))
+    await redis_client.publish("member.events", json.dumps(event))
 
 
 async def _ensure_national_id_available(
-    db: AsyncSession, national_id: str | None, *, exclude_chip_id: uuid.UUID | None = None
+    db, national_id: str | None, *, exclude_member_id: uuid.UUID | None = None
 ) -> None:
-    """Raise if national_id is already used by another chip."""
+    """Raise if national_id is already used by another member."""
     if not national_id:
         return
-    query = select(Chip).where(Chip.national_id == national_id)
-    if exclude_chip_id is not None:
-        query = query.where(Chip.id != exclude_chip_id)
+    query = select(Member).where(Member.national_id == national_id)
+    if exclude_member_id is not None:
+        query = query.where(Member.id != exclude_member_id)
     existing = await db.scalar(query)
     if existing:
         raise AppError(
@@ -143,75 +220,75 @@ async def _ensure_national_id_available(
         )
 
 
-@app.post("/fingerprints", response_model=ChipResponse, status_code=status.HTTP_201_CREATED)
-async def create_chip(req: ChipCreateRequest, db: AsyncSession = Depends(get_db)):
-    """Register a new chip UID with a zero balance."""
-    existing = await db.scalar(select(Chip).where(Chip.uid == req.uid))
+@app.post("/fingerprints", response_model=MemberResponse, status_code=status.HTTP_201_CREATED)
+async def create_member(req: MemberCreateRequest, db=Depends(get_db)):
+    """Register a new member UID with a zero balance."""
+    existing = await db.scalar(select(Member).where(Member.uid == req.uid))
     if existing:
         raise AppError(code="fingerprint_uid_taken", message="Fingerprint UID already registered", http_status=400)
     await _ensure_national_id_available(db, req.national_id)
-    chip = Chip(
+    member = Member(
         uid=req.uid,
         holder_name=req.holder_name,
         national_id=req.national_id,
         is_enabled=True,
     )
-    db.add(chip)
+    db.add(member)
     await db.flush()
-    db.add(Balance(chip_id=chip.id, amount_cents=0))
-    db.add(ChipActivity(chip_id=chip.id, event_type="register", delta_cents=0, description="chip registered"))
+    db.add(Balance(member_id=member.id, amount_cents=0))
+    db.add(MemberActivity(member_id=member.id, event_type="register", delta_cents=0, description="member registered"))
     await db.commit()
-    await db.refresh(chip)
+    await db.refresh(member)
     await _publish(
         {
-            "type": "chip.registered",
-            "chip_id": str(chip.id),
-            "uid": chip.uid,
-            "holder_name": chip.holder_name,
-            "national_id": chip.national_id,
+            "type": "member.registered",
+            "member_id": str(member.id),
+            "uid": member.uid,
+            "holder_name": member.holder_name,
+            "national_id": member.national_id,
         }
     )
-    return ChipResponse.model_validate(chip, from_attributes=True)
+    return MemberResponse.model_validate(member, from_attributes=True)
 
 
-@app.get("/fingerprints", response_model=list[ChipListItemResponse])
-async def list_chips(db: AsyncSession = Depends(get_db)):
-    """List registered chips with balances, newest first."""
+@app.get("/fingerprints", response_model=list[MemberListItemResponse])
+async def list_members(db=Depends(get_db)):
+    """List registered members with balances, newest first."""
     rows = (
         await db.execute(
-            select(Chip, Balance.amount_cents)
-            .outerjoin(Balance, Balance.chip_id == Chip.id)
-            .order_by(Chip.created_at.desc())
+            select(Member, Balance.amount_cents)
+            .outerjoin(Balance, Balance.member_id == Member.id)
+            .order_by(Member.created_at.desc())
         )
     ).all()
-    items: list[ChipListItemResponse] = []
-    for chip, amount_cents in rows:
+    items: list[MemberListItemResponse] = []
+    for member, amount_cents in rows:
         items.append(
-            ChipListItemResponse(
-                id=chip.id,
-                uid=chip.uid,
-                holder_name=chip.holder_name,
-                national_id=chip.national_id,
-                is_enabled=chip.is_enabled,
+            MemberListItemResponse(
+                id=member.id,
+                uid=member.uid,
+                holder_name=member.holder_name,
+                national_id=member.national_id,
+                is_enabled=member.is_enabled,
                 balance_cents=int(amount_cents or 0),
-                created_at=chip.created_at,
+                created_at=member.created_at,
             )
         )
     return items
 
 
-@app.get("/fingerprints/{chip_id}", response_model=ChipResponse)
-async def get_chip(chip_id: str, db: AsyncSession = Depends(get_db)):
-    """Return chip metadata by internal chip ID."""
-    chip = await db.get(Chip, chip_id)
-    if not chip:
-        raise HTTPException(status_code=404, detail="chip_not_found")
-    return ChipResponse.model_validate(chip, from_attributes=True)
+@app.get("/fingerprints/{member_id}", response_model=MemberResponse)
+async def get_member(member_id: str, db=Depends(get_db)):
+    """Return member metadata by internal member ID."""
+    member = await db.get(Member, member_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="member_not_found")
+    return MemberResponse.model_validate(member, from_attributes=True)
 
 
-@app.patch("/fingerprints/{chip_id}", response_model=ChipListItemResponse)
-async def update_chip(chip_id: str, req: ChipUpdateRequest, db: AsyncSession = Depends(get_db)):
-    """Update holder name, national ID, and/or enabled flag for a registered chip."""
+@app.patch("/fingerprints/{member_id}", response_model=MemberListItemResponse)
+async def update_member(member_id: str, req: MemberUpdateRequest, db=Depends(get_db)):
+    """Update holder name, national ID, and/or enabled flag for a registered member."""
     fields = req.model_fields_set
     if "holder_name" not in fields and "national_id" not in fields and "is_enabled" not in fields:
         raise AppError(
@@ -219,134 +296,134 @@ async def update_chip(chip_id: str, req: ChipUpdateRequest, db: AsyncSession = D
             message="Provide holder_name, national_id, and/or is_enabled",
             http_status=400,
         )
-    chip = await db.get(Chip, chip_id)
-    if not chip:
-        raise HTTPException(status_code=404, detail="chip_not_found")
+    member = await db.get(Member, member_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="member_not_found")
 
     if "holder_name" in fields:
         holder_name = req.holder_name.strip() if req.holder_name else None
-        chip.holder_name = holder_name or None
+        member.holder_name = holder_name or None
         db.add(
-            ChipActivity(
-                chip_id=chip.id,
+            MemberActivity(
+                member_id=member.id,
                 event_type="rename",
                 delta_cents=0,
-                description=f"holder_name={chip.holder_name or ''}",
+                description=f"holder_name={member.holder_name or ''}",
             )
         )
 
     if "national_id" in fields:
-        await _ensure_national_id_available(db, req.national_id, exclude_chip_id=chip.id)
-        chip.national_id = req.national_id
+        await _ensure_national_id_available(db, req.national_id, exclude_member_id=member.id)
+        member.national_id = req.national_id
         db.add(
-            ChipActivity(
-                chip_id=chip.id,
+            MemberActivity(
+                member_id=member.id,
                 event_type="national_id",
                 delta_cents=0,
-                description=f"national_id={chip.national_id or ''}",
+                description=f"national_id={member.national_id or ''}",
             )
         )
 
-    if "is_enabled" in fields and req.is_enabled is not None and req.is_enabled != chip.is_enabled:
-        chip.is_enabled = req.is_enabled
+    if "is_enabled" in fields and req.is_enabled is not None and req.is_enabled != member.is_enabled:
+        member.is_enabled = req.is_enabled
         db.add(
-            ChipActivity(
-                chip_id=chip.id,
-                event_type="enable" if chip.is_enabled else "disable",
+            MemberActivity(
+                member_id=member.id,
+                event_type="enable" if member.is_enabled else "disable",
                 delta_cents=0,
-                description=f"is_enabled={chip.is_enabled}",
+                description=f"is_enabled={member.is_enabled}",
             )
         )
 
     await db.commit()
-    await db.refresh(chip)
-    bal = await db.get(Balance, chip.id)
-    return ChipListItemResponse(
-        id=chip.id,
-        uid=chip.uid,
-        holder_name=chip.holder_name,
-        national_id=chip.national_id,
-        is_enabled=chip.is_enabled,
+    await db.refresh(member)
+    bal = await db.get(Balance, member.id)
+    return MemberListItemResponse(
+        id=member.id,
+        uid=member.uid,
+        holder_name=member.holder_name,
+        national_id=member.national_id,
+        is_enabled=member.is_enabled,
         balance_cents=int(bal.amount_cents if bal else 0),
-        created_at=chip.created_at,
+        created_at=member.created_at,
     )
 
 
-@app.delete("/fingerprints/{chip_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_chip(chip_id: str, db: AsyncSession = Depends(get_db)):
-    """Remove a chip, its balance, and activity history."""
-    chip = await db.get(Chip, chip_id)
-    if not chip:
-        raise HTTPException(status_code=404, detail="chip_not_found")
-    await db.execute(delete(MonthlySubscription).where(MonthlySubscription.chip_id == chip.id))
-    await db.execute(delete(ChipActivity).where(ChipActivity.chip_id == chip.id))
-    await db.execute(delete(Balance).where(Balance.chip_id == chip.id))
-    await db.delete(chip)
+@app.delete("/fingerprints/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_member(member_id: str, db=Depends(get_db)):
+    """Remove a member, their balance, and activity history."""
+    member = await db.get(Member, member_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="member_not_found")
+    await db.execute(delete(MonthlySubscription).where(MonthlySubscription.member_id == member.id))
+    await db.execute(delete(MemberActivity).where(MemberActivity.member_id == member.id))
+    await db.execute(delete(Balance).where(Balance.member_id == member.id))
+    await db.delete(member)
     await db.commit()
-    await _publish({"type": "chip.deleted", "chip_id": chip_id, "uid": chip.uid})
+    await _publish({"type": "member.deleted", "member_id": member_id, "uid": member.uid})
     return None
 
 
-@app.patch("/fingerprints/{chip_id}/assign", response_model=ChipResponse)
-async def assign_chip(chip_id: str, req: ChipAssignRequest, db: AsyncSession = Depends(get_db)):
-    """Assign a chip to a user ID."""
-    chip = await db.get(Chip, chip_id)
-    if not chip:
-        raise HTTPException(status_code=404, detail="chip_not_found")
-    chip.assigned_user_id = req.user_id
-    db.add(ChipActivity(chip_id=chip.id, event_type="assign", delta_cents=0, description=f"assigned_user_id={req.user_id}"))
+@app.patch("/fingerprints/{member_id}/assign", response_model=MemberResponse)
+async def assign_member(member_id: str, req: MemberAssignRequest, db=Depends(get_db)):
+    """Assign a member to a user ID."""
+    member = await db.get(Member, member_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="member_not_found")
+    member.assigned_user_id = req.user_id
+    db.add(MemberActivity(member_id=member.id, event_type="assign", delta_cents=0, description=f"assigned_user_id={req.user_id}"))
     await db.commit()
-    await db.refresh(chip)
-    return ChipResponse.model_validate(chip, from_attributes=True)
+    await db.refresh(member)
+    return MemberResponse.model_validate(member, from_attributes=True)
 
 
-@app.patch("/fingerprints/{chip_id}/name", response_model=ChipResponse)
-async def rename_chip(chip_id: str, req: ChipRenameRequest, db: AsyncSession = Depends(get_db)):
+@app.patch("/fingerprints/{member_id}/name", response_model=MemberResponse)
+async def rename_member(member_id: str, req: MemberRenameRequest, db=Depends(get_db)):
     """Set or clear the holder name and optional national ID."""
-    chip = await db.get(Chip, chip_id)
-    if not chip:
-        raise HTTPException(status_code=404, detail="chip_not_found")
+    member = await db.get(Member, member_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="member_not_found")
     holder_name = req.holder_name.strip() if req.holder_name else None
-    chip.holder_name = holder_name or None
+    member.holder_name = holder_name or None
     if "national_id" in req.model_fields_set:
-        await _ensure_national_id_available(db, req.national_id, exclude_chip_id=chip.id)
-        chip.national_id = req.national_id
+        await _ensure_national_id_available(db, req.national_id, exclude_member_id=member.id)
+        member.national_id = req.national_id
     db.add(
-        ChipActivity(
-            chip_id=chip.id,
+        MemberActivity(
+            member_id=member.id,
             event_type="rename",
             delta_cents=0,
-            description=f"holder_name={chip.holder_name or ''};national_id={chip.national_id or ''}",
+            description=f"holder_name={member.holder_name or ''};national_id={member.national_id or ''}",
         )
     )
     await db.commit()
-    await db.refresh(chip)
-    return ChipResponse.model_validate(chip, from_attributes=True)
+    await db.refresh(member)
+    return MemberResponse.model_validate(member, from_attributes=True)
 
 
-@app.get("/fingerprints/{chip_id}/balance", response_model=BalanceResponse)
-async def get_balance(chip_id: str, db: AsyncSession = Depends(get_db)):
-    """Return the current balance for a chip."""
-    bal = await db.get(Balance, chip_id)
+@app.get("/fingerprints/{member_id}/balance", response_model=BalanceResponse)
+async def get_balance(member_id: str, db=Depends(get_db)):
+    """Return the current balance for a member."""
+    bal = await db.get(Balance, member_id)
     if not bal:
         raise HTTPException(status_code=404, detail="balance_not_found")
     return BalanceResponse.model_validate(bal, from_attributes=True)
 
 
-@app.post("/fingerprints/{chip_id}/balance/adjust", response_model=BalanceResponse)
-async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSession = Depends(get_db)):
+@app.post("/fingerprints/{member_id}/balance/adjust", response_model=BalanceResponse)
+async def adjust_balance(member_id: str, req: AdjustBalanceRequest, db=Depends(get_db)):
     """Apply a positive or negative balance delta and record activity.
 
     When idempotency_key is set and already recorded, return the current balance
     without applying the delta again (safe retries after a crash).
     """
-    bal = await db.get(Balance, chip_id)
+    bal = await db.get(Balance, member_id)
     if not bal:
         raise HTTPException(status_code=404, detail="balance_not_found")
 
     key = req.idempotency_key.strip() if req.idempotency_key else None
     if key:
-        existing = await db.scalar(select(ChipActivity).where(ChipActivity.idempotency_key == key))
+        existing = await db.scalar(select(MemberActivity).where(MemberActivity.idempotency_key == key))
         if existing is not None:
             return BalanceResponse.model_validate(bal, from_attributes=True)
 
@@ -355,8 +432,8 @@ async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSessi
         raise AppError(code="insufficient_balance", message="Balance cannot go below zero", http_status=409)
     bal.amount_cents = new_amount
     db.add(
-        ChipActivity(
-            chip_id=bal.chip_id,
+        MemberActivity(
+            member_id=bal.member_id,
             event_type=req.reason,
             delta_cents=req.delta_cents,
             description=req.description,
@@ -365,56 +442,56 @@ async def adjust_balance(chip_id: str, req: AdjustBalanceRequest, db: AsyncSessi
     )
     await db.commit()
     await db.refresh(bal)
-    await _publish({"type": "chip.balance_changed", "chip_id": str(bal.chip_id), "delta_cents": req.delta_cents})
+    await _publish({"type": "member.balance_changed", "member_id": str(bal.member_id), "delta_cents": req.delta_cents})
     return BalanceResponse.model_validate(bal, from_attributes=True)
 
 
 @app.post("/fingerprints/lookup-by-national-id", response_model=LookupByNationalIdResponse)
-async def lookup_by_national_id(req: LookupByNationalIdRequest, db: AsyncSession = Depends(get_db)):
-    """Find a chip by national ID (Nedarim Zeout). Do not pick among duplicates."""
+async def lookup_by_national_id(req: LookupByNationalIdRequest, db=Depends(get_db)):
+    """Find a member by national ID (Nedarim Zeout). Do not pick among duplicates."""
     rows = (
-        await db.execute(select(Chip).where(Chip.national_id == req.national_id))
+        await db.execute(select(Member).where(Member.national_id == req.national_id))
     ).scalars().all()
     if not rows:
-        raise HTTPException(status_code=404, detail="chip_not_found")
+        raise HTTPException(status_code=404, detail="member_not_found")
     if len(rows) > 1:
         raise AppError(
             code="national_id_ambiguous",
-            message="Multiple chips share this national ID",
+            message="Multiple members share this national ID",
             http_status=409,
         )
-    chip = rows[0]
-    bal = await db.get(Balance, chip.id)
+    member = rows[0]
+    bal = await db.get(Balance, member.id)
     if not bal:
         raise HTTPException(status_code=500, detail="balance_missing")
     return LookupByNationalIdResponse(
-        chip_id=chip.id,
-        uid=chip.uid,
-        is_enabled=chip.is_enabled,
+        member_id=member.id,
+        uid=member.uid,
+        is_enabled=member.is_enabled,
         balance_cents=bal.amount_cents,
-        national_id=chip.national_id,
+        national_id=member.national_id,
     )
 
 
-@app.post("/fingerprints/validate", response_model=ValidateChipResponse)
-async def validate(req: ValidateChipRequest, db: AsyncSession = Depends(get_db)):
-    """Look up a chip by UID and return enablement plus balance."""
-    chip = await db.scalar(select(Chip).where(Chip.uid == req.uid))
-    if not chip:
-        raise HTTPException(status_code=404, detail="chip_not_found")
-    bal = await db.get(Balance, chip.id)
+@app.post("/fingerprints/validate", response_model=ValidateMemberResponse)
+async def validate(req: ValidateMemberRequest, db=Depends(get_db)):
+    """Look up a member by UID and return enablement plus balance."""
+    member = await db.scalar(select(Member).where(Member.uid == req.uid))
+    if not member:
+        raise HTTPException(status_code=404, detail="member_not_found")
+    bal = await db.get(Balance, member.id)
     if not bal:
         raise HTTPException(status_code=500, detail="balance_missing")
-    snap = await subscription_snapshot(db, chip.id)
-    db.add(ChipActivity(chip_id=chip.id, event_type="validate", delta_cents=0, description="chip validated"))
+    snap = await subscription_snapshot(db, member.id)
+    db.add(MemberActivity(member_id=member.id, event_type="validate", delta_cents=0, description="member validated"))
     await db.commit()
-    return ValidateChipResponse(
-        chip_id=chip.id,
-        uid=chip.uid,
-        holder_name=chip.holder_name,
-        national_id=chip.national_id,
-        is_enabled=chip.is_enabled,
-        assigned_user_id=chip.assigned_user_id,
+    return ValidateMemberResponse(
+        member_id=member.id,
+        uid=member.uid,
+        holder_name=member.holder_name,
+        national_id=member.national_id,
+        is_enabled=member.is_enabled,
+        assigned_user_id=member.assigned_user_id,
         balance_cents=bal.amount_cents,
         subscription_active=snap.subscription_active,
         subscription_month_name=snap.subscription_month_name,
@@ -425,7 +502,7 @@ async def validate(req: ValidateChipRequest, db: AsyncSession = Depends(get_db))
 
 def _subscription_response(row: MonthlySubscription, snap) -> SubscriptionResponse:
     return SubscriptionResponse(
-        chip_id=row.chip_id,
+        member_id=row.member_id,
         hebrew_year=row.hebrew_year,
         hebrew_month=row.hebrew_month,
         hebrew_month_name=row.hebrew_month_name,
@@ -440,42 +517,42 @@ def _subscription_response(row: MonthlySubscription, snap) -> SubscriptionRespon
     )
 
 
-@app.post("/fingerprints/{chip_id}/subscriptions/activate", response_model=SubscriptionResponse)
+@app.post("/fingerprints/{member_id}/subscriptions/activate", response_model=SubscriptionResponse)
 async def subscriptions_activate(
-    chip_id: str, req: ActivateSubscriptionRequest, db: AsyncSession = Depends(get_db)
+    member_id: str, req: ActivateSubscriptionRequest, db=Depends(get_db)
 ):
     """Activate a Hebrew-month subscription after a successful card payment."""
     row = await activate_subscription(
         db,
-        chip_id=uuid.UUID(chip_id),
+        member_id=uuid.UUID(member_id),
         amount_cents=req.amount_cents,
         nedarim_transaction_id=req.nedarim_transaction_id,
         hebrew_year=req.hebrew_year,
         hebrew_month=req.hebrew_month,
         hebrew_month_name=req.hebrew_month_name,
     )
-    snap = await subscription_snapshot(db, row.chip_id)
+    snap = await subscription_snapshot(db, row.member_id)
     return _subscription_response(row, snap)
 
 
-@app.post("/fingerprints/{chip_id}/subscriptions/mark-free-entry", response_model=SubscriptionResponse)
+@app.post("/fingerprints/{member_id}/subscriptions/mark-free-entry", response_model=SubscriptionResponse)
 async def subscriptions_mark_free_entry(
-    chip_id: str,
+    member_id: str,
     req: MarkFreeEntryRequest | None = None,
-    db: AsyncSession = Depends(get_db),
+    db=Depends(get_db),
 ):
     """Mark today's free subscription entrance as used."""
     row = await mark_free_entry(
         db,
-        chip_id=uuid.UUID(chip_id),
+        member_id=uuid.UUID(member_id),
         idempotency_key=req.idempotency_key if req else None,
     )
-    snap = await subscription_snapshot(db, row.chip_id)
+    snap = await subscription_snapshot(db, row.member_id)
     return _subscription_response(row, snap)
 
 
-@app.get("/fingerprints/{chip_id}/activity", response_model=list[ChipActivityResponse])
-async def activity(chip_id: str, db: AsyncSession = Depends(get_db)):
-    """Return chip activity history newest first."""
-    rows = (await db.execute(select(ChipActivity).where(ChipActivity.chip_id == chip_id).order_by(ChipActivity.id.desc()))).scalars().all()
-    return [ChipActivityResponse.model_validate(r, from_attributes=True) for r in rows]
+@app.get("/fingerprints/{member_id}/activity", response_model=list[MemberActivityResponse])
+async def activity(member_id: str, db=Depends(get_db)):
+    """Return member activity history newest first."""
+    rows = (await db.execute(select(MemberActivity).where(MemberActivity.member_id == member_id).order_by(MemberActivity.id.desc()))).scalars().all()
+    return [MemberActivityResponse.model_validate(r, from_attributes=True) for r in rows]

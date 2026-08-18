@@ -26,8 +26,8 @@ list_stale(states: set[AttemptStatus], older_than: datetime) -> list[AccessAttem
 ### `ILedgerPort` (chip / fingerprint balance)
 
 ```text
-charge(attempt_id, chip_id, amount_cents, correlation_id) -> ChargeResult
-refund(attempt_id, chip_id, amount_cents, correlation_id) -> RefundResult
+charge(attempt_id, member_id, amount_cents, correlation_id) -> ChargeResult
+refund(attempt_id, member_id, amount_cents, correlation_id) -> RefundResult
 
 # Idempotency keys (mandatory):
 #   charge -> "access-charge:{attempt_id}"
@@ -37,7 +37,7 @@ refund(attempt_id, chip_id, amount_cents, correlation_id) -> RefundResult
 Maps to existing fingerprints-service:
 
 ```http
-POST /chips/{chip_id}/balance/adjust
+POST /chips/{member_id}/balance/adjust
 Content-Type: application/json
 
 {
