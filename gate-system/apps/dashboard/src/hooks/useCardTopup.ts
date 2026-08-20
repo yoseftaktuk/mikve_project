@@ -86,9 +86,6 @@ export function useCardTopup(fingerprintUid: string | null, options: UseCardTopu
 
   const startTopup = useCallback(
     async (amountCents: number, purchaseProduct: CardTopupProduct = product) => {
-      // #region agent log
-      fetch('http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'833d12'},body:JSON.stringify({sessionId:'833d12',runId:'pre-fix',hypothesisId:'B',location:'useCardTopup.ts:startTopup',message:'startTopup called',data:{amountCents,purchaseProduct,fingerprintUid:Boolean(fingerprintUid)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (!fingerprintUid) return
       setPhase('creating')
       setError(null)
@@ -99,15 +96,9 @@ export function useCardTopup(fingerprintUid: string | null, options: UseCardTopu
           amount_cents: amountCents,
           product: purchaseProduct,
         })
-        // #region agent log
-        fetch('http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'833d12'},body:JSON.stringify({sessionId:'833d12',runId:'pre-fix',hypothesisId:'D',location:'useCardTopup.ts:startTopup:ok',message:'createCardTopup succeeded',data:{topupId:result.topup_id,product:result.product,amount:result.amount_cents},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         setCreated(result)
         setPhase('ready')
       } catch (err) {
-        // #region agent log
-        fetch('http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'833d12'},body:JSON.stringify({sessionId:'833d12',runId:'pre-fix',hypothesisId:'C',location:'useCardTopup.ts:startTopup:err',message:'createCardTopup failed',data:{error:extractApiErrorMessage(err)},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         setError(extractApiErrorMessage(err))
         setPhase('failed')
       }
@@ -128,9 +119,6 @@ export function useCardTopup(fingerprintUid: string | null, options: UseCardTopu
               : created
                 ? 'already_created'
                 : null
-    // #region agent log
-    fetch('http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'833d12'},body:JSON.stringify({sessionId:'833d12',runId:'post-fix',hypothesisId:'A',location:'useCardTopup.ts:autoStartEffect',message:'auto-start effect run',data:{product,phase,hasUid:Boolean(fingerprintUid),autoStarted:autoStartedRef.current,hasCreated:Boolean(created),subscriptionPriceCents,skipReason},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (skipReason) return
     // Mark started only when the deferred create actually runs. Strict Mode
     // remounts clear the timer; setting the flag earlier permanently skipped create.
@@ -138,16 +126,10 @@ export function useCardTopup(fingerprintUid: string | null, options: UseCardTopu
     const timer = window.setTimeout(() => {
       if (cancelled || autoStartedRef.current) return
       autoStartedRef.current = true
-      // #region agent log
-      fetch('http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'833d12'},body:JSON.stringify({sessionId:'833d12',runId:'post-fix',hypothesisId:'A',location:'useCardTopup.ts:autoStartTimeout',message:'auto-start timeout fired',data:{subscriptionPriceCents},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       void startTopup(subscriptionPriceCents, 'monthly_subscription')
     }, 0)
     return () => {
       cancelled = true
-      // #region agent log
-      fetch('http://127.0.0.1:7292/ingest/63c6dbc4-c680-4396-a7ce-14fb5d793358',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'833d12'},body:JSON.stringify({sessionId:'833d12',runId:'post-fix',hypothesisId:'A',location:'useCardTopup.ts:autoStartCleanup',message:'auto-start effect cleanup cleared timer',data:{autoStarted:autoStartedRef.current},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       window.clearTimeout(timer)
     }
   }, [product, fingerprintUid, phase, created, startTopup, subscriptionPriceCents])

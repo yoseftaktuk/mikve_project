@@ -87,6 +87,46 @@ async def startup() -> None:
     global redis_client, hardware_consumer, orchestrator, reconciler
     configure_logging(settings.service_name, settings.log_level)
     async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'access_attempts'
+                  AND column_name = 'chip_id'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'access_attempts'
+                  AND column_name = 'member_id'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.access_attempts RENAME COLUMN chip_id TO member_id';
+              END IF;
+            END $$;
+            """
+        )
+        await conn.exec_driver_sql(
+            f"""
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'access_logs'
+                  AND column_name = 'chip_id'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = '{settings.postgres_schema}'
+                  AND table_name = 'access_logs'
+                  AND column_name = 'member_id'
+              ) THEN
+                EXECUTE 'ALTER TABLE {settings.postgres_schema}.access_logs RENAME COLUMN chip_id TO member_id';
+              END IF;
+            END $$;
+            """
+        )
         await conn.run_sync(Base.metadata.create_all)
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     cash_session.set_publish(_publish)
