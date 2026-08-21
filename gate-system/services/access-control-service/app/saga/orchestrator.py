@@ -26,7 +26,6 @@ from .repository import AccessAttemptRepository, TransitionConflictError
 from .statuses import (
     METHOD_CASH,
     METHOD_FINGERPRINT,
-    METHOD_MEMBER,
     STATUS_CHARGED,
     STATUS_COMPLETED,
     STATUS_CREATED,
@@ -811,17 +810,6 @@ class AccessOrchestrator:
             "ts": datetime.now(timezone.utc).isoformat(),
         }
         await self._emit(event)
-
-    def _decision_from_attempt(self, attempt: AccessAttempt) -> AccessDecisionResponse:
-        granted = attempt.status == STATUS_COMPLETED
-        return AccessDecisionResponse(
-            granted=granted,
-            reason="ok" if granted else (attempt.failure_reason or attempt.status.lower()),
-            member_id=str(attempt.member_id) if attempt.member_id else None,
-            fee_cents=attempt.fee_cents,
-            balance_before_cents=attempt.balance_before_cents,
-            balance_after_cents=attempt.balance_after_cents,
-        )
 
     async def _legacy_deny(
         self,

@@ -1,7 +1,6 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 
 import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status

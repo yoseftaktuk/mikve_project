@@ -29,10 +29,6 @@ STEP_FAILED = "failed"
 STEP_CANCELLED = "cancelled"
 STEP_TIMEOUT = "timeout"
 
-TERMINAL_STEPS = frozenset(
-    {STEP_STORED, STEP_DUPLICATE, STEP_MISMATCH, STEP_FAILED, STEP_CANCELLED, STEP_TIMEOUT}
-)
-
 
 def fingerprint_enabled(serial_port: str | None) -> bool:
     """Fingerprint support is opt-in via a non-empty serial port, like RFID."""

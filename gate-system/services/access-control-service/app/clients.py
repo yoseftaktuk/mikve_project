@@ -45,17 +45,6 @@ class LedgerUser:
     created_at: str | None = None
 
 
-@dataclass(frozen=True)
-class MemberNationalIdMatch:
-    """Ledger member resolved from a Nedarim Zeout national ID lookup."""
-
-    member_id: str
-    uid: str
-    is_enabled: bool
-    balance_cents: int
-    national_id: str | None = None
-
-
 class FingerprintsClient:
     """HTTP client for fingerprints-service registration, validation, and balance changes."""
 
@@ -268,27 +257,6 @@ class FingerprintsClient:
         if resp.status_code == 404:
             raise ValueError("member_not_found")
         resp.raise_for_status()
-
-    async def lookup_by_national_id(self, national_id: str) -> MemberNationalIdMatch:
-        """Resolve exactly one member by national ID."""
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(
-                f"{self._base}/fingerprints/lookup-by-national-id",
-                json={"national_id": national_id},
-            )
-        if resp.status_code == 404:
-            raise ValueError("member_not_found")
-        if resp.status_code == 409:
-            raise ValueError("national_id_ambiguous")
-        resp.raise_for_status()
-        data = resp.json()
-        return MemberNationalIdMatch(
-            member_id=str(data["member_id"]),
-            uid=data["uid"],
-            is_enabled=bool(data["is_enabled"]),
-            balance_cents=int(data["balance_cents"]),
-            national_id=data.get("national_id"),
-        )
 
 
 class HardwareClient:
