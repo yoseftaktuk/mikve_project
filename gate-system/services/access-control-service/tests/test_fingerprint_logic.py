@@ -168,10 +168,14 @@ class FakeFingerprintsClient:
 class FakeHardwareClient:
     def __init__(self) -> None:
         self.door_opens = 0
+        self.deleted_slots: list[int] = []
 
     async def open_door(self, seconds: int, **kwargs) -> dict:
         self.door_opens += 1
         return {"status": "confirmed", "unlocked_for_seconds": seconds}
+
+    async def delete_fingerprint(self, slot: int) -> None:
+        self.deleted_slots.append(int(slot))
 
 
 class Recorder:
@@ -395,6 +399,7 @@ async def test_cancel_clears_only_matching_approval():
 
 async def test_complete_enrollment_creates_named_chip_with_initial_balance():
     member_client = FakeFingerprintsClient()
+    hardware_client = FakeHardwareClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(
@@ -402,7 +407,12 @@ async def test_complete_enrollment_creates_named_chip_with_initial_balance():
     )
 
     await complete_enrollment(
-        session.session_id, 12, member_client=member_client, publish=publish, enrollments=enrollments
+        session.session_id,
+        12,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
     )
 
     assert member_client.registered == [("FP-012", "דנה כהן", "123456782")]
@@ -411,36 +421,51 @@ async def test_complete_enrollment_creates_named_chip_with_initial_balance():
     assert publish.last()["uid"] == "FP-012"
     assert publish.last()["balance_cents"] == 5000
     assert publish.last()["national_id"] == "123456782"
+    assert hardware_client.deleted_slots == []
 
 
 async def test_complete_enrollment_renames_when_sensor_reuses_slot():
     uid = slot_to_uid(2)
     member_client = FakeFingerprintsClient({uid: chip(uid, balance_cents=1200, holder_name="שם קודם")})
+    hardware_client = FakeHardwareClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(holder_name="שם חדש", national_id="123456782")
 
     await complete_enrollment(
-        session.session_id, 2, member_client=member_client, publish=publish, enrollments=enrollments
+        session.session_id,
+        2,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
     )
 
     assert member_client.registered == []
     assert member_client.renamed == [(member_id_for(uid), "שם חדש", "123456782")]
     assert publish.last()["balance_cents"] == 1200
     assert publish.last()["national_id"] == "123456782"
+    assert hardware_client.deleted_slots == []
 
 
 async def test_complete_enrollment_ignores_unknown_session():
     member_client = FakeFingerprintsClient()
+    hardware_client = FakeHardwareClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
 
     await complete_enrollment(
-        "missing-session", 3, member_client=member_client, publish=publish, enrollments=enrollments
+        "missing-session",
+        3,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
     )
 
     assert member_client.registered == []
     assert publish.events == []
+    assert hardware_client.deleted_slots == []
 
 
 def test_enrollment_session_is_consumed_once():
@@ -449,6 +474,63 @@ def test_enrollment_session_is_consumed_once():
 
     assert enrollments.pop(session.session_id) is not None
     assert enrollments.pop(session.session_id) is None
+
+
+def test_mark_cancelling_keeps_session_identity():
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(holder_name="דנה", national_id="123456782")
+
+    assert enrollments.mark_cancelling(session.session_id) is True
+    assert enrollments.mark_cancelling(session.session_id) is True
+    assert enrollments.mark_cancelling("unknown") is False
+
+    pending = enrollments.pop(session.session_id)
+    assert pending is not None
+    assert pending.cancelled is True
+    assert pending.session_id == session.session_id
+    assert pending.holder_name == "דנה"
+
+
+async def test_cancelled_enrollment_deletes_slot_without_creating_member():
+    member_client = FakeFingerprintsClient()
+    hardware_client = FakeHardwareClient()
+    publish = Recorder()
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(
+        holder_name="דנה", national_id="123456782", initial_amount_cents=5000
+    )
+    assert enrollments.mark_cancelling(session.session_id) is True
+
+    await complete_enrollment(
+        session.session_id,
+        12,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
+    )
+
+    assert hardware_client.deleted_slots == [12]
+    assert member_client.registered == []
+    assert member_client.renamed == []
+    assert member_client.adjustments == []
+    assert publish.types() == ["fingerprint.enroll_progress"]
+    assert publish.last()["step"] == "cancelled"
+    assert publish.last()["slot"] == 12
+    assert enrollments.pop(session.session_id) is None
+
+    # Duplicate terminal enrolled event is a no-op.
+    await complete_enrollment(
+        session.session_id,
+        12,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
+    )
+    assert hardware_client.deleted_slots == [12]
+    assert member_client.registered == []
+    assert publish.types() == ["fingerprint.enroll_progress"]
 
 
 async def test_complete_enrollment_fails_when_national_id_taken():
@@ -460,17 +542,24 @@ async def test_complete_enrollment_fails_when_national_id_taken():
         raise ValueError("national_id_taken")
 
     member_client.register = register_taken  # type: ignore[method-assign]
+    hardware_client = FakeHardwareClient()
     publish = Recorder()
     enrollments = PendingEnrollmentStore()
     session = enrollments.create(holder_name="דנה", national_id="123456782")
 
     await complete_enrollment(
-        session.session_id, 5, member_client=member_client, publish=publish, enrollments=enrollments
+        session.session_id,
+        5,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
     )
 
     assert publish.types() == ["fingerprint.enroll_progress"]
     assert publish.last()["step"] == "failed"
     assert publish.last()["reason"] == "national_id_taken"
+    assert hardware_client.deleted_slots == []
 
 
 async def test_identify_mode_publishes_identified_without_pending():

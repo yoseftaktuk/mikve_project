@@ -438,9 +438,9 @@ async def management_fingerprint_enroll(req: FingerprintEnrollRequest):
     include_in_schema=False,
 )
 async def management_fingerprint_enroll_cancel(req: FingerprintEnrollCancelRequest):
-    """Abort a running enrollment and forget its pending details."""
-    enrollments.discard(req.session_id)
-    await hardware_client.cancel_enroll()
+    """Abort a running enrollment; keep the session until enrolled cleanup or TTL."""
+    if enrollments.mark_cancelling(req.session_id):
+        await hardware_client.cancel_enroll()
     return None
 
 

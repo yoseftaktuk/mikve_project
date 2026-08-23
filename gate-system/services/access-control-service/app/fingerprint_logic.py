@@ -6,7 +6,7 @@ import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -67,6 +67,7 @@ class PendingEnrollment:
     national_id: str
     initial_amount_cents: int
     created_at: float
+    cancelled: bool = False
 
 
 class PendingApprovalStore:
@@ -207,6 +208,20 @@ class PendingEnrollmentStore:
         """Take a session by id, dropping it from the store."""
         self._purge_expired()
         return self._sessions.pop(session_id, None)
+
+    def mark_cancelling(self, session_id: str) -> bool:
+        """Mark a pending session as cancelled without removing it.
+
+        Returns True when the session exists (including if already cancelled).
+        The session stays so a late fingerprint.enrolled can delete the sensor slot.
+        """
+        self._purge_expired()
+        session = self._sessions.get(session_id)
+        if session is None:
+            return False
+        if not session.cancelled:
+            self._sessions[session_id] = replace(session, cancelled=True)
+        return True
 
     def discard(self, session_id: str) -> None:
         """Forget a session without consuming its result."""
@@ -509,6 +524,7 @@ async def complete_enrollment(
     slot: int,
     *,
     member_client: FingerprintsClient,
+    hardware_client: HardwareClient,
     publish: PublishFn,
     enrollments: PendingEnrollmentStore,
 ) -> None:
@@ -516,6 +532,32 @@ async def complete_enrollment(
     session = enrollments.pop(session_id)
     if session is None:
         logger.warning("fingerprint_enroll_session_missing session_id=%s slot=%s", session_id, slot)
+        return
+
+    if session.cancelled:
+        logger.info(
+            "fingerprint_enroll_cancelled_cleanup session_id=%s slot=%s",
+            session_id,
+            slot,
+        )
+        try:
+            await hardware_client.delete_fingerprint(slot)
+        except Exception:
+            # Member must not be created; sensor may retain an orphan until reconciliation.
+            logger.exception(
+                "fingerprint_enroll_cancelled_delete_failed session_id=%s slot=%s",
+                session_id,
+                slot,
+            )
+        await publish(
+            {
+                "type": "fingerprint.enroll_progress",
+                "session_id": session_id,
+                "step": "cancelled",
+                "slot": slot,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         return
 
     uid = slot_to_uid(slot)

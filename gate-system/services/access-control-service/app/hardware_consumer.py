@@ -138,6 +138,7 @@ class HardwareEventConsumer:
                     str(session_id),
                     int(slot),
                     member_client=self._member_client,
+                    hardware_client=self._hardware_client,
                     publish=self._publish,
                     enrollments=self._enrollments,
                 )
