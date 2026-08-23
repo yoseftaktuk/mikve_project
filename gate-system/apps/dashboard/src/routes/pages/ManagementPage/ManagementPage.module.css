@@ -2,6 +2,27 @@
   display: flex;
   justify-content: flex-end;
   margin-bottom: 0.25rem;
+  flex: 0 0 auto;
+}
+
+/* Single-column scrollable stack — avoids compactGrid 2-col overlap with StatusCard height:100%. */
+.managementShell {
+  display: flex !important;
+  flex-direction: column;
+  gap: var(--layout-gap);
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  height: 100%;
+  min-height: 0;
+}
+
+.doorCard,
+.statsCard,
+.usersCard {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto !important;
+  min-height: 0;
 }
 
 .logoutButton {
@@ -83,14 +104,14 @@
 }
 
 .errorBanner {
-  grid-column: 1 / -1;
+  flex: 0 0 auto;
   margin: 0;
   font-size: var(--text-fluid-sm);
   color: #ef4444;
 }
 
 .successBanner {
-  grid-column: 1 / -1;
+  flex: 0 0 auto;
   margin: 0;
   font-size: var(--text-fluid-sm);
   color: #16a34a;
@@ -103,8 +124,8 @@
 }
 
 .usersCard {
-  grid-column: 1 / -1;
-  min-height: 0;
+  max-height: min(40dvh, 28rem);
+  overflow: hidden;
 }
 
 .usersHeader {
@@ -210,4 +231,181 @@
 
 .dangerButton:hover:not(:disabled) {
   background: #fef2f2;
+}
+
+.statsCard {
+  overflow: visible !important;
+}
+
+.rangeToggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.rangeButton,
+.rangeButtonActive {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.7rem;
+  font-size: var(--text-fluid-sm);
+  border-radius: 0.55rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.rangeButtonActive {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  font-weight: 600;
+}
+
+.rangeButton:disabled,
+.rangeButtonActive:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.kpiItem {
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  text-align: right;
+}
+
+.kpiLabel {
+  font-size: clamp(0.7rem, 1.5vw, 0.8rem);
+  color: var(--text);
+  margin-bottom: 0.2rem;
+}
+
+.kpiValue {
+  font-size: var(--text-fluid-base);
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.kpiHint {
+  margin-top: 0.2rem;
+  font-size: clamp(0.65rem, 1.3vw, 0.75rem);
+  color: var(--text);
+}
+
+.statsSubheading {
+  margin: 0.75rem 0 0.35rem;
+  font-size: var(--text-fluid-sm);
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.statsColumns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 48rem) {
+  .statsColumns {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.breakdownList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.breakdownList li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: var(--text-fluid-sm);
+  color: var(--text-h);
+}
+
+.breakdownList strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.operationalAlerts {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.65rem;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+}
+
+.chartWrap {
+  margin-bottom: 0.5rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.chartSvg {
+  width: 100%;
+  max-width: 36rem;
+  height: 9rem;
+  display: block;
+}
+
+.chartGranted {
+  fill: #16a34a;
+}
+
+.chartDenied {
+  fill: #ef4444;
+}
+
+.chartEmpty {
+  fill: var(--border);
+}
+
+.chartAxisLabel {
+  fill: var(--text);
+  font-size: 10px;
+}
+
+.chartLegend {
+  display: flex;
+  gap: 0.85rem;
+  font-size: var(--text-fluid-sm);
+  color: var(--text);
+  margin-top: 0.25rem;
+}
+
+.chartLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.legendGranted,
+.legendDenied {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 0.15rem;
+  display: inline-block;
+}
+
+.legendGranted {
+  background: #16a34a;
+}
+
+.legendDenied {
+  background: #ef4444;
 }

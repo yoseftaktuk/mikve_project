@@ -3,8 +3,10 @@ import { usePageMeta } from '../../../app/pageMeta'
 import { formatMoney } from '../../../app/money'
 import { PageShell } from '../../../components/PageShell'
 import { StatusCard, statusCardStyles } from '../../../components/StatusCard'
+import { useManagementStats } from '../../../hooks/useManagementStats'
 import { useManagementUsers } from '../../../hooks/useManagementUsers'
 import styles from './ManagementPage.module.css'
+import { ManagementStatisticsSection } from './ManagementStatisticsSection'
 import { useManagementPage } from './useManagementPage'
 
 /** PIN-protected management page for door open and registered users. */
@@ -26,6 +28,7 @@ export function ManagementPage() {
   } = useManagementPage()
 
   const users = useManagementUsers(authenticated)
+  const stats = useManagementStats(authenticated)
   const editFormRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -35,7 +38,7 @@ export function ManagementPage() {
 
   usePageMeta(
     authenticated
-      ? { title: 'ניהול', subtitle: 'פתיחת דלת וניהול רשומים' }
+      ? { title: 'ניהול', subtitle: 'פתיחת דלת, רשומים וסטטיסטיקה' }
       : { title: 'ניהול', subtitle: 'הזן קוד סודי לכניסה' },
   )
 
@@ -79,14 +82,14 @@ export function ManagementPage() {
   const bannerSuccess = actionSuccess || users.success
 
   return (
-    <PageShell variant="compactGrid">
-      <div className={styles.toolbar} style={{ gridColumn: '1 / -1' }}>
+    <PageShell variant="default" className={styles.managementShell}>
+      <div className={styles.toolbar}>
         <button type="button" className={styles.logoutButton} onClick={logout}>
           יציאה
         </button>
       </div>
 
-      <StatusCard>
+      <StatusCard className={styles.doorCard}>
         <h2 className={statusCardStyles.sectionTitle}>פתיחת דלת</h2>
         <p className={statusCardStyles.hint}>
           {gateStatus?.door_unlock_seconds ?? '…'} שניות
@@ -94,6 +97,17 @@ export function ManagementPage() {
         <button type="button" className={styles.submitButton} disabled={loading} onClick={() => void openDoor()}>
           פתח דלת
         </button>
+      </StatusCard>
+
+      <StatusCard className={styles.statsCard}>
+        <ManagementStatisticsSection
+          range={stats.range}
+          onRangeChange={stats.setRange}
+          stats={stats.stats}
+          loading={stats.loading}
+          error={stats.error}
+          onRefresh={() => void stats.refresh()}
+        />
       </StatusCard>
 
       <StatusCard className={styles.usersCard}>

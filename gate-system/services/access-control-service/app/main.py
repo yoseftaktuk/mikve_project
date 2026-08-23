@@ -56,6 +56,7 @@ from .management import (
     update_user as management_update_user,
 )
 from .settings import settings
+from .statistics import ManagementStatisticsResponse, VALID_RANGES, fetch_management_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +314,22 @@ async def management_chip_topup(req: MemberTopupRequest):
 async def management_users_list():
     """List registered fingerprint ledger users."""
     return await management_list_users(member_client)
+
+
+@app.get(
+    "/management/statistics",
+    response_model=ManagementStatisticsResponse,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_statistics(
+    range: str = "today",
+    db: AsyncSession = Depends(get_db),
+):
+    """Return aggregated management KPIs for the selected date range."""
+    if range not in VALID_RANGES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_range")
+    return await fetch_management_statistics(db, range)
 
 
 @app.patch(
