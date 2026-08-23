@@ -1,2 +1,2 @@
-export { PageShell, pageShellStyles } from './PageShell'
+export { PageShell } from './PageShell'
 export type { PageShellVariant } from './usePageShell'

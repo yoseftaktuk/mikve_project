@@ -88,7 +88,6 @@ export function DashboardPage() {
             gateStatus={gateStatus}
             cashProgress={cashProgress}
             lastActivity={lastActivity}
-            formatMoney={formatMoney}
           />
 
           <details className={styles.devCard}>

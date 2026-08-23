@@ -1,1 +1,1 @@
-export type PageShellVariant = 'default' | 'centered' | 'grid' | 'compactGrid'
+export type PageShellVariant = 'default' | 'centered' | 'compactGrid'

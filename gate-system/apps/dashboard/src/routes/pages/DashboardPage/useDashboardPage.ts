@@ -33,8 +33,6 @@ type SimulateCashResult = {
   remaining_cents: number
 }
 
-export { formatMoney }
-
 function grantedToast(event: {
   balance_after_cents?: number
   remaining_cents?: number

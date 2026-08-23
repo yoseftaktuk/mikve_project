@@ -12,11 +12,9 @@ export function PageShell({ children, variant = 'default', className }: PageShel
   const variantClass =
     variant === 'centered'
       ? styles.centered
-      : variant === 'grid'
-        ? styles.grid
-        : variant === 'compactGrid'
-          ? styles.compactGrid
-          : styles.default
+      : variant === 'compactGrid'
+        ? styles.compactGrid
+        : styles.default
 
   return (
     <div className={[styles.shell, variantClass, className].filter(Boolean).join(' ')}>
@@ -24,5 +22,3 @@ export function PageShell({ children, variant = 'default', className }: PageShel
     </div>
   )
 }
-
-export { styles as pageShellStyles }

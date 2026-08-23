@@ -4,12 +4,11 @@ import { useStatusCard } from './useStatusCard'
 
 type StatusCardProps = {
   children: ReactNode
-  variant?: 'default' | 'compact' | 'flushTop'
   className?: string
 }
 
-export function StatusCard({ children, variant = 'default', className }: StatusCardProps) {
-  const { cardClassName } = useStatusCard({ variant, className })
+export function StatusCard({ children, className }: StatusCardProps) {
+  const { cardClassName } = useStatusCard({ className })
 
   return <section className={cardClassName}>{children}</section>
 }

@@ -14,33 +14,6 @@
   overflow: hidden;
 }
 
-.cardCompact {
-  /* grid gap handles spacing */
-}
-
-.cardFlushTop {
-  /* grid gap handles spacing */
-}
-
-.icon {
-  width: clamp(2.75rem, 8vw, 4rem);
-  height: clamp(2.75rem, 8vw, 4rem);
-  margin: 0 auto 0.25rem;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: clamp(1.25rem, 4vw, 2rem);
-  background: var(--accent-bg);
-  border: 2px solid var(--accent-border);
-  flex-shrink: 0;
-}
-
-.title {
-  margin: 0;
-  font-size: var(--text-fluid-lg);
-}
-
 .sectionTitle {
   margin: 0;
   font-size: var(--text-fluid-lg);
@@ -51,15 +24,6 @@
   color: var(--text);
   line-height: 1.4;
   margin: 0;
-}
-
-.hintSpaced {
-  margin-top: 0.25rem;
-}
-
-.hintActivity {
-  margin-top: 0.35rem;
-  font-size: var(--text-fluid-sm);
 }
 
 .scrollBody {

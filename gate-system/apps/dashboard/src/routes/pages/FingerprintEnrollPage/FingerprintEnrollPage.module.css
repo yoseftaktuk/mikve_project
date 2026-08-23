@@ -5,23 +5,6 @@
   zoom: 1.7;
 }
 
-.toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 0.25rem;
-}
-
-.logoutButton {
-  min-height: var(--touch-min);
-  padding: 0.35rem 0.75rem;
-  font-size: var(--text-fluid-sm);
-  border-radius: 0.65rem;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-h);
-  cursor: pointer;
-}
-
 .formField {
   display: block;
   text-align: right;
@@ -40,11 +23,6 @@
   background: var(--bg);
   color: var(--text-h);
   font-size: var(--text-fluid-base);
-}
-
-.inputPin {
-  text-align: center;
-  font-size: var(--text-fluid-lg);
 }
 
 .submitButton {

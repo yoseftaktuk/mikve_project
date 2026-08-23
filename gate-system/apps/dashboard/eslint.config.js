@@ -23,7 +23,7 @@ export default defineConfig([
         'error',
         {
           allowConstantExport: true,
-          allowExportNames: ['usePageMetaContext', 'ThemeContext', 'pageShellStyles', 'statusCardStyles'],
+          allowExportNames: ['usePageMetaContext', 'ThemeContext', 'statusCardStyles'],
         },
       ],
     },

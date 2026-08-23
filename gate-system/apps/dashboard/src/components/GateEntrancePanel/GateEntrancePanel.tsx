@@ -9,7 +9,6 @@ type GateEntrancePanelProps = {
   gateStatus: GateStatus | null
   cashProgress: number
   lastActivity: string | null
-  formatMoney: (cents: number) => string
 }
 
 /** Displays entrance methods, fee, cash progress, and last gate activity. */
