@@ -280,7 +280,15 @@ class FingerprintController:
                 return {"step": STEP_DUPLICATE, "slot": int(existing_slot)}
 
             self._emit(session_id, STEP_REMOVE_FINGER)
-            self._wait_for_finger_removal(sensor, timeout_seconds=self._capture_timeout_seconds)
+            removed = self._wait_for_finger_removal(
+                sensor, timeout_seconds=self._capture_timeout_seconds
+            )
+            if not removed:
+                if self._enroll_cancel.is_set():
+                    self._emit(session_id, STEP_CANCELLED)
+                    return {"step": STEP_CANCELLED, "slot": None}
+                self._emit(session_id, STEP_TIMEOUT)
+                return {"step": STEP_TIMEOUT, "slot": None}
             if self._enroll_cancel.is_set():
                 self._emit(session_id, STEP_CANCELLED)
                 return {"step": STEP_CANCELLED, "slot": None}

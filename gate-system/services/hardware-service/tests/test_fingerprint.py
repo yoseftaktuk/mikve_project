@@ -145,6 +145,24 @@ async def test_enroll_times_out_when_no_finger_arrives():
     assert [step for _sid, step, _slot in steps] == ["place_finger", "timeout"]
 
 
+async def test_enroll_times_out_when_finger_never_removed():
+    steps: list = []
+    # First True = capture; remaining Trues keep the finger on the sensor during removal wait.
+    sensor = FakeSensor(images=[True] + [True] * 40)
+    controller = build_controller(sensor, loop=asyncio.get_running_loop(), steps=steps, matches=[])
+
+    result = await asyncio.to_thread(controller.enroll_sync, "sess-no-remove")
+    await asyncio.sleep(0.05)
+
+    assert result == {"step": "timeout", "slot": None}
+    assert [step for _sid, step, _slot in steps] == [
+        "place_finger",
+        "remove_finger",
+        "timeout",
+    ]
+    assert sensor.converted_buffers == [fp._BUFFER_A]
+
+
 async def test_enroll_can_be_cancelled_while_waiting():
     steps: list = []
     sensor = FakeSensor(images=[])
@@ -157,6 +175,27 @@ async def test_enroll_can_be_cancelled_while_waiting():
     await asyncio.sleep(0.05)
 
     assert result == {"step": "cancelled", "slot": None}
+
+
+async def test_enroll_can_be_cancelled_while_waiting_for_removal():
+    steps: list = []
+    sensor = FakeSensor(images=[True] + [True] * 40)
+    controller = build_controller(sensor, loop=asyncio.get_running_loop(), steps=steps, matches=[])
+
+    task = asyncio.create_task(asyncio.to_thread(controller.enroll_sync, "sess-cancel-remove"))
+    await asyncio.sleep(0.1)
+    controller.cancel_enroll()
+    result = await task
+    await asyncio.sleep(0.05)
+
+    assert result == {"step": "cancelled", "slot": None}
+    assert [step for _sid, step, _slot in steps] == [
+        "place_finger",
+        "remove_finger",
+        "cancelled",
+    ]
+    assert "place_again" not in [step for _sid, step, _slot in steps]
+    assert sensor.converted_buffers == [fp._BUFFER_A]
 
 
 async def test_identify_loop_reports_match_then_no_match():
