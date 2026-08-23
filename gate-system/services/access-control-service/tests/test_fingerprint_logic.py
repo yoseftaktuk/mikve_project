@@ -56,12 +56,19 @@ class FakeDb:
 
 
 class FakeFingerprintsClient:
-    def __init__(self, members: dict[str, MemberValidation] | None = None) -> None:
+    def __init__(
+        self,
+        members: dict[str, MemberValidation] | None = None,
+        *,
+        adjust_balance_raises: bool = False,
+    ) -> None:
         self.chips = members or {}
         self.balances: dict[str, int] = {m.member_id: m.balance_cents for m in self.chips.values()}
         self.registered: list[tuple[str, str | None]] = []
         self.renamed: list[tuple[str, str | None]] = []
         self.adjustments: list[tuple[str, int, str]] = []
+        self.deleted_users: list[str] = []
+        self.adjust_balance_raises = adjust_balance_raises
 
     async def validate(self, uid: str) -> MemberValidation:
         if uid not in self.chips:
@@ -142,6 +149,15 @@ class FakeFingerprintsClient:
                 )
                 return
 
+    async def delete_user(self, member_id: str) -> None:
+        self.deleted_users.append(member_id)
+        for uid, member in list(self.chips.items()):
+            if member.member_id == member_id:
+                del self.chips[uid]
+                self.balances.pop(member_id, None)
+                return
+        raise ValueError("member_not_found")
+
     async def adjust_balance(
         self,
         member_id: str,
@@ -150,6 +166,8 @@ class FakeFingerprintsClient:
         description: str | None = None,
         idempotency_key: str | None = None,
     ) -> int:
+        if self.adjust_balance_raises:
+            raise RuntimeError("balance_adjust_failed")
         if idempotency_key:
             for key, bal in list(getattr(self, "_idempotency", {}).items()):
                 if key == idempotency_key:
@@ -166,15 +184,18 @@ class FakeFingerprintsClient:
 
 
 class FakeHardwareClient:
-    def __init__(self) -> None:
+    def __init__(self, *, delete_raises: bool = False) -> None:
         self.door_opens = 0
         self.deleted_slots: list[int] = []
+        self.delete_raises = delete_raises
 
     async def open_door(self, seconds: int, **kwargs) -> dict:
         self.door_opens += 1
         return {"status": "confirmed", "unlocked_for_seconds": seconds}
 
     async def delete_fingerprint(self, slot: int) -> None:
+        if self.delete_raises:
+            raise RuntimeError("sensor_delete_failed")
         self.deleted_slots.append(int(slot))
 
 
@@ -559,7 +580,97 @@ async def test_complete_enrollment_fails_when_national_id_taken():
     assert publish.types() == ["fingerprint.enroll_progress"]
     assert publish.last()["step"] == "failed"
     assert publish.last()["reason"] == "national_id_taken"
-    assert hardware_client.deleted_slots == []
+    assert publish.last()["slot"] == 5
+    assert hardware_client.deleted_slots == [5]
+    assert member_client.deleted_users == []
+    assert "fingerprint.registered" not in publish.types()
+
+
+async def test_complete_enrollment_deletes_slot_when_registration_fails():
+    member_client = FakeFingerprintsClient()
+
+    async def register_fail(
+        uid: str, holder_name: str | None = None, national_id: str | None = None
+    ) -> None:
+        raise ValueError("service_unavailable")
+
+    member_client.register = register_fail  # type: ignore[method-assign]
+    hardware_client = FakeHardwareClient()
+    publish = Recorder()
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(holder_name="דנה", national_id="123456782")
+
+    await complete_enrollment(
+        session.session_id,
+        7,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
+    )
+
+    assert hardware_client.deleted_slots == [7]
+    assert member_client.registered == []
+    assert publish.last()["step"] == "failed"
+    assert publish.last()["reason"] == "enrollment_failed"
+    assert "fingerprint.registered" not in publish.types()
+
+
+async def test_complete_enrollment_deletes_slot_and_member_when_balance_fails():
+    member_client = FakeFingerprintsClient(adjust_balance_raises=True)
+    hardware_client = FakeHardwareClient()
+    publish = Recorder()
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(
+        holder_name="דנה", national_id="123456782", initial_amount_cents=5000
+    )
+
+    await complete_enrollment(
+        session.session_id,
+        8,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
+    )
+
+    assert hardware_client.deleted_slots == [8]
+    assert member_client.registered == [("FP-008", "דנה", "123456782")]
+    assert member_client.deleted_users == [member_id_for("FP-008")]
+    assert member_client.adjustments == []
+    assert publish.last()["step"] == "failed"
+    assert publish.last()["reason"] == "enrollment_failed"
+    assert "fingerprint.registered" not in publish.types()
+
+
+async def test_complete_enrollment_reports_manual_cleanup_when_delete_fails():
+    member_client = FakeFingerprintsClient()
+
+    async def register_taken(
+        uid: str, holder_name: str | None = None, national_id: str | None = None
+    ) -> None:
+        raise ValueError("national_id_taken")
+
+    member_client.register = register_taken  # type: ignore[method-assign]
+    hardware_client = FakeHardwareClient(delete_raises=True)
+    publish = Recorder()
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(holder_name="דנה", national_id="123456782")
+
+    await complete_enrollment(
+        session.session_id,
+        9,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
+    )
+
+    assert publish.last()["step"] == "failed"
+    assert publish.last()["reason"] == "national_id_taken"
+    assert publish.last()["cleanup_failed"] is True
+    assert publish.last()["manual_sensor_cleanup_required"] is True
+    assert "fingerprint.registered" not in publish.types()
 
 
 async def test_identify_mode_publishes_identified_without_pending():

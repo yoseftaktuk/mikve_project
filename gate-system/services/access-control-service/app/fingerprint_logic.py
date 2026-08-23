@@ -519,6 +519,61 @@ async def approve_pending(
     )
 
 
+async def _fail_enrollment_after_store(
+    *,
+    session_id: str,
+    slot: int,
+    reason: str,
+    hardware_client: HardwareClient,
+    publish: PublishFn,
+    created_member_id: str | None = None,
+    member_client: FingerprintsClient | None = None,
+) -> None:
+    """Delete a stored sensor template (and roll back a new member) after enrollment failure."""
+    logger.warning(
+        "fingerprint_enroll_failed_after_store session_id=%s slot=%s reason=%s",
+        session_id,
+        slot,
+        reason,
+    )
+    cleanup_failed = False
+    try:
+        await hardware_client.delete_fingerprint(slot)
+    except Exception:
+        cleanup_failed = True
+        logger.exception(
+            "fingerprint_enroll_sensor_cleanup_failed session_id=%s slot=%s reason=%s "
+            "manual_sensor_cleanup_required",
+            session_id,
+            slot,
+            reason,
+        )
+
+    if created_member_id is not None and member_client is not None:
+        try:
+            await member_client.delete_user(created_member_id)
+        except Exception:
+            logger.exception(
+                "fingerprint_enroll_member_rollback_failed session_id=%s slot=%s member_id=%s",
+                session_id,
+                slot,
+                created_member_id,
+            )
+
+    event: dict[str, Any] = {
+        "type": "fingerprint.enroll_progress",
+        "session_id": session_id,
+        "step": "failed",
+        "reason": reason,
+        "slot": slot,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    if cleanup_failed:
+        event["cleanup_failed"] = True
+        event["manual_sensor_cleanup_required"] = True
+    await publish(event)
+
+
 async def complete_enrollment(
     session_id: str,
     slot: int,
@@ -561,6 +616,7 @@ async def complete_enrollment(
         return
 
     uid = slot_to_uid(slot)
+    created_member_id: str | None = None
     try:
         try:
             member = await member_client.validate(uid)
@@ -582,32 +638,43 @@ async def complete_enrollment(
             member = await member_client.validate(uid)
             member_id = member.member_id
             balance_cents = member.balance_cents
-    except ValueError as exc:
-        if str(exc) == "national_id_taken":
-            logger.warning(
-                "fingerprint_enroll_national_id_taken session_id=%s national_id=%s",
-                session_id,
-                session.national_id,
-            )
-            await publish(
-                {
-                    "type": "fingerprint.enroll_progress",
-                    "session_id": session_id,
-                    "step": "failed",
-                    "reason": "national_id_taken",
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            return
-        raise
+            created_member_id = member_id
 
-    if session.initial_amount_cents > 0:
-        balance_cents = await member_client.adjust_balance(
-            member_id=member_id,
-            delta_cents=session.initial_amount_cents,
-            reason="management_topup",
-            description="initial fingerprint balance",
+        if session.initial_amount_cents > 0:
+            balance_cents = await member_client.adjust_balance(
+                member_id=member_id,
+                delta_cents=session.initial_amount_cents,
+                reason="management_topup",
+                description="initial fingerprint balance",
+            )
+    except ValueError as exc:
+        reason = "national_id_taken" if str(exc) == "national_id_taken" else "enrollment_failed"
+        await _fail_enrollment_after_store(
+            session_id=session_id,
+            slot=slot,
+            reason=reason,
+            hardware_client=hardware_client,
+            publish=publish,
+            created_member_id=created_member_id,
+            member_client=member_client,
         )
+        return
+    except Exception:
+        logger.exception(
+            "fingerprint_enroll_unexpected session_id=%s slot=%s",
+            session_id,
+            slot,
+        )
+        await _fail_enrollment_after_store(
+            session_id=session_id,
+            slot=slot,
+            reason="enrollment_failed",
+            hardware_client=hardware_client,
+            publish=publish,
+            created_member_id=created_member_id,
+            member_client=member_client,
+        )
+        return
 
     logger.info(
         "fingerprint_registered uid=%s slot=%s holder_name=%s national_id=%s balance_cents=%s",
