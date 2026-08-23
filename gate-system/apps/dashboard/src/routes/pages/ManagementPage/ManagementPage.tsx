@@ -3,6 +3,7 @@ import { usePageMeta } from '../../../app/pageMeta'
 import { formatMoney } from '../../../app/money'
 import { PageShell } from '../../../components/PageShell'
 import { StatusCard, statusCardStyles } from '../../../components/StatusCard'
+import { useManagementPricing } from '../../../hooks/useManagementPricing'
 import { useManagementStats } from '../../../hooks/useManagementStats'
 import { useManagementUsers } from '../../../hooks/useManagementUsers'
 import styles from './ManagementPage.module.css'
@@ -29,6 +30,7 @@ export function ManagementPage() {
 
   const users = useManagementUsers(authenticated)
   const stats = useManagementStats(authenticated)
+  const pricing = useManagementPricing(authenticated)
   const editFormRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -38,7 +40,7 @@ export function ManagementPage() {
 
   usePageMeta(
     authenticated
-      ? { title: 'ניהול', subtitle: 'פתיחת דלת, רשומים וסטטיסטיקה' }
+      ? { title: 'ניהול', subtitle: 'פתיחת דלת, מחירים, רשומים וסטטיסטיקה' }
       : { title: 'ניהול', subtitle: 'הזן קוד סודי לכניסה' },
   )
 
@@ -78,8 +80,8 @@ export function ManagementPage() {
     )
   }
 
-  const bannerError = actionError || users.error
-  const bannerSuccess = actionSuccess || users.success
+  const bannerError = actionError || users.error || pricing.error
+  const bannerSuccess = actionSuccess || users.success || pricing.success
 
   return (
     <PageShell variant="default" className={styles.managementShell}>
@@ -96,6 +98,49 @@ export function ManagementPage() {
         </p>
         <button type="button" className={styles.submitButton} disabled={loading} onClick={() => void openDoor()}>
           פתח דלת
+        </button>
+      </StatusCard>
+
+      <StatusCard className={styles.pricingCard}>
+        <div className={styles.usersHeader}>
+          <h2 className={statusCardStyles.sectionTitle}>מחירים</h2>
+          <button
+            type="button"
+            className={styles.refreshButton}
+            disabled={pricing.loading || pricing.saving}
+            onClick={() => void pricing.refresh()}
+          >
+            {pricing.loading ? 'טוען…' : 'רענן'}
+          </button>
+        </div>
+        <p className={statusCardStyles.hint}>מחיר כניסה ומנוי חודשי (בשקלים)</p>
+        <label className={styles.formField}>
+          מחיר כניסה (₪)
+          <input
+            value={pricing.entranceShekels}
+            onChange={(e) => pricing.setEntranceShekels(e.target.value)}
+            inputMode="decimal"
+            className={styles.input}
+            disabled={pricing.loading || pricing.saving}
+          />
+        </label>
+        <label className={styles.formField}>
+          מחיר מנוי חודשי (₪)
+          <input
+            value={pricing.subscriptionShekels}
+            onChange={(e) => pricing.setSubscriptionShekels(e.target.value)}
+            inputMode="decimal"
+            className={styles.input}
+            disabled={pricing.loading || pricing.saving}
+          />
+        </label>
+        <button
+          type="button"
+          className={styles.submitButton}
+          disabled={pricing.loading || pricing.saving}
+          onClick={() => void pricing.save()}
+        >
+          {pricing.saving ? 'שומר…' : 'שמור מחירים'}
         </button>
       </StatusCard>
 

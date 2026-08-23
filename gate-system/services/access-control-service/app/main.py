@@ -13,7 +13,7 @@ from gate_shared.logging import configure_logging
 
 from .access_logic import CashSession, process_cash_inserted
 from .clients import FingerprintsClient, HardwareClient
-from .db import engine, get_db
+from .db import SessionLocal, engine, get_db
 from .fingerprint_logic import (
     PendingApprovalStore,
     PendingEnrollmentStore,
@@ -22,6 +22,7 @@ from .fingerprint_logic import (
 )
 from .hardware_consumer import HardwareEventConsumer
 from .models import AccessLog, Base, HardwareEvent
+from .pricing import ensure_pricing_row, get_entrance_fee_cents, get_pricing, update_pricing
 from .realtime import PubSubFanout
 from .saga import AccessAttemptReconciler, AccessOrchestrator
 from .saga import models as saga_models  # noqa: F401 — register saga tables on Base.metadata
@@ -41,6 +42,8 @@ from .management import (
     MemberTopupResponse,
     ManagementAuthResponse,
     ManagementPinRequest,
+    ManagementPricingResponse,
+    ManagementPricingUpdateRequest,
     ManagementSessionResponse,
     ManagementUserResponse,
     ManagementUserUpdateRequest,
@@ -128,6 +131,11 @@ async def startup() -> None:
             """
         )
         await conn.run_sync(Base.metadata.create_all)
+    async with SessionLocal() as session:
+        pricing = await ensure_pricing_row(session)
+        await session.commit()
+        seeded_entrance = pricing.entrance_fee_cents
+        seeded_subscription = pricing.subscription_price_cents
     redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     cash_session.set_publish(_publish)
     approvals.set_publish(_publish)
@@ -153,8 +161,9 @@ async def startup() -> None:
         reconciler = AccessAttemptReconciler(orchestrator)
         await reconciler.start()
     logger.info(
-        "startup_complete entrance_fee_cents=%s door_unlock_seconds=%s cash_session_timeout_seconds=%s access_saga_enabled=%s",
-        settings.entrance_fee_cents,
+        "startup_complete entrance_fee_cents=%s subscription_price_cents=%s door_unlock_seconds=%s cash_session_timeout_seconds=%s access_saga_enabled=%s",
+        seeded_entrance,
+        seeded_subscription,
         settings.door_unlock_seconds,
         settings.cash_session_timeout_seconds,
         settings.access_saga_enabled,
@@ -191,12 +200,13 @@ async def app_error_handler(_, exc: AppError):
 
 
 @app.get("/healthz")
-async def healthz():
+async def healthz(db: AsyncSession = Depends(get_db)):
+    entrance_fee_cents = await get_entrance_fee_cents(db)
     return {
         "status": "ok",
         "service": settings.service_name,
         "cash_accumulated_cents": cash_session.accumulated_cents,
-        "entrance_fee_cents": settings.entrance_fee_cents,
+        "entrance_fee_cents": entrance_fee_cents,
         "door_unlock_seconds": settings.door_unlock_seconds,
         "cash_session_timeout_seconds": settings.cash_session_timeout_seconds,
     }
@@ -261,7 +271,7 @@ async def dev_simulate_cash(req: SimulateCashRequest, db: AsyncSession = Depends
     return SimulateCashResponse(
         granted=granted,
         accumulated_cents=cash_session.accumulated_cents,
-        entrance_fee_cents=settings.entrance_fee_cents,
+        entrance_fee_cents=await get_entrance_fee_cents(db),
         remaining_cents=remaining_or_accumulated if granted else 0,
     )
 
@@ -330,6 +340,48 @@ async def management_statistics(
     if range not in VALID_RANGES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_range")
     return await fetch_management_statistics(db, range)
+
+
+@app.get(
+    "/management/pricing",
+    response_model=ManagementPricingResponse,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_pricing_get(db: AsyncSession = Depends(get_db)):
+    """Return the current entrance fee and monthly subscription price."""
+    pricing = await get_pricing(db)
+    return ManagementPricingResponse(
+        entrance_fee_cents=pricing.entrance_fee_cents,
+        subscription_price_cents=pricing.subscription_price_cents,
+    )
+
+
+@app.patch(
+    "/management/pricing",
+    response_model=ManagementPricingResponse,
+    dependencies=[Depends(require_management_token)],
+    include_in_schema=False,
+)
+async def management_pricing_update(
+    req: ManagementPricingUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update entrance fee and/or monthly subscription price."""
+    try:
+        pricing = await update_pricing(
+            db,
+            entrance_fee_cents=req.entrance_fee_cents if "entrance_fee_cents" in req.model_fields_set else None,
+            subscription_price_cents=(
+                req.subscription_price_cents if "subscription_price_cents" in req.model_fields_set else None
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    return ManagementPricingResponse(
+        entrance_fee_cents=pricing.entrance_fee_cents,
+        subscription_price_cents=pricing.subscription_price_cents,
+    )
 
 
 @app.patch(

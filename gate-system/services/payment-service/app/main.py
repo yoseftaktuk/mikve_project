@@ -26,6 +26,7 @@ from .schemas import (
     ChargeMemberResponse,
 )
 from .hebrew_calendar import current_hebrew_month
+from .pricing import get_subscription_price_cents
 from .settings import settings
 from .topup_logic import (
     abandon_card_topup,
@@ -169,6 +170,7 @@ async def healthz(db: AsyncSession = Depends(get_db)):
         select(func.count()).select_from(CardTopup).where(CardTopup.status == STATUS_CREDITING)
     )
     hebrew = current_hebrew_month()
+    subscription_price_cents = await get_subscription_price_cents(db)
     return {
         "status": "ok",
         "service": settings.service_name,
@@ -176,7 +178,7 @@ async def healthz(db: AsyncSession = Depends(get_db)):
         "nedarim_configured": payment_provider.is_configured,
         "public_base_url_set": bool(settings.public_base_url),
         "topup_amounts_cents": list(settings.topup_amount_options_cents),
-        "subscription_price_cents": settings.subscription_price_cents,
+        "subscription_price_cents": subscription_price_cents,
         "current_hebrew_month_name": hebrew.name,
         "pending_topups": int(pending or 0),
         "crediting_topups": int(crediting or 0),

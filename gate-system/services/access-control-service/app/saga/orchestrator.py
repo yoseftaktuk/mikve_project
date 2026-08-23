@@ -19,6 +19,7 @@ from ..clients import (
     HardwareUnavailableError,
 )
 from ..models import AccessLog
+from ..pricing import get_entrance_fee_cents
 from ..schemas import AccessDecisionResponse
 from ..settings import settings
 from .models import AccessAttempt, CashReceipt, DoorOperation, PaymentTransaction, RefundTransaction
@@ -120,7 +121,7 @@ class AccessOrchestrator:
         if amount_cents <= 0:
             return False, self._cash.accumulated_cents
 
-        fee = settings.entrance_fee_cents
+        fee = await get_entrance_fee_cents(db)
         total = await self._cash.add(amount_cents)
         await self._emit(
             {

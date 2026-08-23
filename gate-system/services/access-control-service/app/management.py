@@ -84,6 +84,25 @@ class ManagementUserUpdateRequest(BaseModel):
         return self
 
 
+class ManagementPricingResponse(BaseModel):
+    entrance_fee_cents: int
+    subscription_price_cents: int
+
+
+class ManagementPricingUpdateRequest(BaseModel):
+    entrance_fee_cents: int | None = Field(default=None, gt=0, le=1_000_000)
+    subscription_price_cents: int | None = Field(default=None, gt=0, le=1_000_000)
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self) -> ManagementPricingUpdateRequest:
+        if (
+            "entrance_fee_cents" not in self.model_fields_set
+            and "subscription_price_cents" not in self.model_fields_set
+        ):
+            raise ValueError("Provide entrance_fee_cents and/or subscription_price_cents")
+        return self
+
+
 def _purge_expired_tokens() -> None:
     """Remove expired management session tokens from memory."""
     now = time.time()

@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .clients import FingerprintsClient, HardwareClient
 from .access_logic import CashSession
 from .models import AccessLog
+from .pricing import get_entrance_fee_cents
 from .schemas import AccessDecisionResponse
-from .settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ class PendingEnrollment:
     initial_amount_cents: int
     created_at: float
     cancelled: bool = False
+    processing: bool = False
 
 
 class PendingApprovalStore:
@@ -209,6 +210,27 @@ class PendingEnrollmentStore:
         self._purge_expired()
         return self._sessions.pop(session_id, None)
 
+    def begin_completion(self, session_id: str) -> PendingEnrollment | None:
+        """Claim one stored-template event while still allowing cancellation.
+
+        The session remains in the store until the workflow reaches a terminal
+        state. That lets the cancel endpoint mark it while an awaited member
+        service call is in flight.
+        """
+        self._purge_expired()
+        session = self._sessions.get(session_id)
+        if session is None or session.processing:
+            return None
+        claimed = replace(session, processing=True)
+        self._sessions[session_id] = claimed
+        return claimed
+
+    def is_cancelled(self, session_id: str) -> bool:
+        """Return whether cancellation won while enrollment was processing."""
+        self._purge_expired()
+        session = self._sessions.get(session_id)
+        return session is not None and session.cancelled
+
     def mark_cancelling(self, session_id: str) -> bool:
         """Mark a pending session as cancelled without removing it.
 
@@ -336,7 +358,7 @@ async def process_fingerprint_scan(
     When a desk identify session is active, publish fingerprint.identified (or
     fingerprint.identify_failed) instead of creating door approvals / top-up offers.
     """
-    fee = settings.entrance_fee_cents
+    fee = await get_entrance_fee_cents(db)
     uid = slot_to_uid(slot)
     identify_mode = identify is not None and identify.is_active()
 
@@ -483,7 +505,7 @@ async def process_fingerprint_unmatched(
         uid=None,
         member_id=None,
         reason="unknown_fingerprint",
-        fee_cents=settings.entrance_fee_cents,
+        fee_cents=await get_entrance_fee_cents(db),
     )
 
 
@@ -528,6 +550,7 @@ async def _fail_enrollment_after_store(
     publish: PublishFn,
     created_member_id: str | None = None,
     member_client: FingerprintsClient | None = None,
+    renamed_member: "MemberValidation | None" = None,
 ) -> None:
     """Delete a stored sensor template (and roll back a new member) after enrollment failure."""
     logger.warning(
@@ -560,6 +583,22 @@ async def _fail_enrollment_after_store(
                 created_member_id,
             )
 
+    if renamed_member is not None and member_client is not None:
+        try:
+            await member_client.rename(
+                renamed_member.member_id,
+                renamed_member.holder_name,
+                national_id=renamed_member.national_id,
+                set_national_id=True,
+            )
+        except Exception:
+            logger.exception(
+                "fingerprint_enroll_member_restore_failed session_id=%s slot=%s member_id=%s",
+                session_id,
+                slot,
+                renamed_member.member_id,
+            )
+
     event: dict[str, Any] = {
         "type": "fingerprint.enroll_progress",
         "session_id": session_id,
@@ -584,7 +623,7 @@ async def complete_enrollment(
     enrollments: PendingEnrollmentStore,
 ) -> None:
     """Create (or rename) the virtual member for a freshly stored fingerprint template."""
-    session = enrollments.pop(session_id)
+    session = enrollments.begin_completion(session_id)
     if session is None:
         logger.warning("fingerprint_enroll_session_missing session_id=%s slot=%s", session_id, slot)
         return
@@ -613,14 +652,34 @@ async def complete_enrollment(
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
         )
+        enrollments.discard(session_id)
         return
 
     uid = slot_to_uid(slot)
     created_member_id: str | None = None
+    renamed_member = None
+
+    async def cancel_after_store() -> None:
+        await _fail_enrollment_after_store(
+            session_id=session_id,
+            slot=slot,
+            reason="cancelled",
+            hardware_client=hardware_client,
+            publish=publish,
+            created_member_id=created_member_id,
+            member_client=member_client,
+            renamed_member=renamed_member,
+        )
+        enrollments.discard(session_id)
+
     try:
         try:
             member = await member_client.validate(uid)
+            if enrollments.is_cancelled(session_id):
+                await cancel_after_store()
+                return
             # Slot reused by the sensor: keep the existing member and their balance, update identity.
+            renamed_member = member
             await member_client.rename(
                 member.member_id,
                 session.holder_name,
@@ -632,13 +691,19 @@ async def complete_enrollment(
         except ValueError as exc:
             if str(exc) == "national_id_taken":
                 raise
-            await member_client.register(
+            if enrollments.is_cancelled(session_id):
+                await cancel_after_store()
+                return
+            member = await member_client.register(
                 uid, holder_name=session.holder_name, national_id=session.national_id
             )
-            member = await member_client.validate(uid)
             member_id = member.member_id
             balance_cents = member.balance_cents
             created_member_id = member_id
+
+        if enrollments.is_cancelled(session_id):
+            await cancel_after_store()
+            return
 
         if session.initial_amount_cents > 0:
             balance_cents = await member_client.adjust_balance(
@@ -647,6 +712,9 @@ async def complete_enrollment(
                 reason="management_topup",
                 description="initial fingerprint balance",
             )
+        if enrollments.is_cancelled(session_id):
+            await cancel_after_store()
+            return
     except ValueError as exc:
         reason = "national_id_taken" if str(exc) == "national_id_taken" else "enrollment_failed"
         await _fail_enrollment_after_store(
@@ -657,7 +725,9 @@ async def complete_enrollment(
             publish=publish,
             created_member_id=created_member_id,
             member_client=member_client,
+            renamed_member=renamed_member,
         )
+        enrollments.discard(session_id)
         return
     except Exception:
         logger.exception(
@@ -673,7 +743,9 @@ async def complete_enrollment(
             publish=publish,
             created_member_id=created_member_id,
             member_client=member_client,
+            renamed_member=renamed_member,
         )
+        enrollments.discard(session_id)
         return
 
     logger.info(
@@ -684,6 +756,7 @@ async def complete_enrollment(
         session.national_id,
         balance_cents,
     )
+    enrollments.discard(session_id)
     await publish(
         {
             "type": "fingerprint.registered",

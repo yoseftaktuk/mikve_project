@@ -81,6 +81,7 @@ class FakeFingerprintsClient:
             assigned_user_id=member.assigned_user_id,
             balance_cents=self.balances[member.member_id],
             holder_name=member.holder_name,
+            national_id=member.national_id,
             subscription_active=member.subscription_active,
             subscription_month_name=member.subscription_month_name,
             subscription_free_entry_available_today=member.subscription_free_entry_available_today,
@@ -109,7 +110,7 @@ class FakeFingerprintsClient:
 
     async def register(
         self, uid: str, holder_name: str | None = None, national_id: str | None = None
-    ) -> None:
+    ) -> MemberValidation:
         self.registered.append((uid, holder_name, national_id))
         mid = member_id_for(uid)
         self.chips[uid] = MemberValidation(
@@ -122,6 +123,7 @@ class FakeFingerprintsClient:
             national_id=national_id,
         )
         self.balances[mid] = 0
+        return self.chips[uid]
 
     async def rename(
         self,
@@ -554,6 +556,44 @@ async def test_cancelled_enrollment_deletes_slot_without_creating_member():
     assert publish.types() == ["fingerprint.enroll_progress"]
 
 
+async def test_cancellation_during_member_lookup_cleans_up_before_registration():
+    member_client = FakeFingerprintsClient()
+    hardware_client = FakeHardwareClient()
+    publish = Recorder()
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(holder_name="דנה", national_id="123456782")
+    lookup_started = asyncio.Event()
+    allow_lookup = asyncio.Event()
+    original_validate = member_client.validate
+
+    async def delayed_validate(uid: str):
+        lookup_started.set()
+        await allow_lookup.wait()
+        return await original_validate(uid)
+
+    member_client.validate = delayed_validate  # type: ignore[method-assign]
+    task = asyncio.create_task(
+        complete_enrollment(
+            session.session_id,
+            12,
+            member_client=member_client,
+            hardware_client=hardware_client,
+            publish=publish,
+            enrollments=enrollments,
+        )
+    )
+    await lookup_started.wait()
+    assert enrollments.mark_cancelling(session.session_id) is True
+    allow_lookup.set()
+    await task
+
+    assert hardware_client.deleted_slots == [12]
+    assert member_client.registered == []
+    assert publish.last()["step"] == "failed"
+    assert publish.last()["reason"] == "cancelled"
+    assert enrollments.pop(session.session_id) is None
+
+
 async def test_complete_enrollment_fails_when_national_id_taken():
     member_client = FakeFingerprintsClient()
 
@@ -641,6 +681,47 @@ async def test_complete_enrollment_deletes_slot_and_member_when_balance_fails():
     assert publish.last()["step"] == "failed"
     assert publish.last()["reason"] == "enrollment_failed"
     assert "fingerprint.registered" not in publish.types()
+
+
+async def test_complete_enrollment_restores_reused_member_when_balance_fails():
+    uid = slot_to_uid(8)
+    member_client = FakeFingerprintsClient(
+        {
+            uid: chip(
+                uid,
+                balance_cents=1200,
+                holder_name="שם קודם",
+            )
+        },
+        adjust_balance_raises=True,
+    )
+    original = member_client.chips[uid]
+    member_client.chips[uid] = MemberValidation(
+        **{**original.__dict__, "national_id": "987654321"}
+    )
+    hardware_client = FakeHardwareClient()
+    publish = Recorder()
+    enrollments = PendingEnrollmentStore()
+    session = enrollments.create(
+        holder_name="שם חדש", national_id="123456782", initial_amount_cents=5000
+    )
+
+    await complete_enrollment(
+        session.session_id,
+        8,
+        member_client=member_client,
+        hardware_client=hardware_client,
+        publish=publish,
+        enrollments=enrollments,
+    )
+
+    assert hardware_client.deleted_slots == [8]
+    assert member_client.deleted_users == []
+    assert member_client.renamed == [
+        (member_id_for(uid), "שם חדש", "123456782"),
+        (member_id_for(uid), "שם קודם", "987654321"),
+    ]
+    assert publish.last()["step"] == "failed"
 
 
 async def test_complete_enrollment_reports_manual_cleanup_when_delete_fails():

@@ -282,6 +282,40 @@ async def test_create_subscription_rejects_wrong_amount(public_url: None) -> Non
 
 
 @pytest.mark.asyncio
+async def test_create_subscription_uses_db_price(public_url: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.topup_logic.settings.subscription_price_cents", 30000)
+
+    class DbWithPrice(FakeDb):
+        async def scalar(self, _statement: object) -> int:
+            return 35000
+
+    chip = enabled_chip()
+    db = DbWithPrice()
+    nedarim = FakePaymentProvider(result=CreateTransactionResult(transaction_id="NED-SUB-DB"))
+
+    with pytest.raises(AppError) as wrong:
+        await create_card_topup(
+            fingerprint_uid=chip.uid,
+            amount_cents=30000,
+            product=PRODUCT_MONTHLY_SUBSCRIPTION,
+            db=db,  # type: ignore[arg-type]
+            member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+            payment_provider=nedarim,  # type: ignore[arg-type]
+        )
+    assert wrong.value.code == "invalid_amount"
+
+    created = await create_card_topup(
+        fingerprint_uid=chip.uid,
+        amount_cents=35000,
+        product=PRODUCT_MONTHLY_SUBSCRIPTION,
+        db=db,  # type: ignore[arg-type]
+        member_client=FakeFingerprintsClient({chip.uid: chip}),  # type: ignore[arg-type]
+        payment_provider=nedarim,  # type: ignore[arg-type]
+    )
+    assert created.amount_cents == 35000
+
+
+@pytest.mark.asyncio
 async def test_create_subscription_rejects_when_already_active(public_url: None) -> None:
     chip = MemberValidation(
         member_id=member_id_for("FP-001"),

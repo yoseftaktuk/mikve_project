@@ -69,9 +69,16 @@ def _normalize_product(product: str | None) -> str:
     return value
 
 
-def _require_allowed_amount(amount_cents: int, *, product: str) -> None:
+async def _require_allowed_amount(
+    db: AsyncSession,
+    amount_cents: int,
+    *,
+    product: str,
+) -> None:
     if product == PRODUCT_MONTHLY_SUBSCRIPTION:
-        expected = settings.subscription_price_cents
+        from .pricing import get_subscription_price_cents
+
+        expected = await get_subscription_price_cents(db)
         if amount_cents != expected:
             raise AppError(
                 code="invalid_amount",
@@ -122,7 +129,7 @@ async def create_card_topup(
     cannot alter what the cardholder is charged.
     """
     product = _normalize_product(product)
-    _require_allowed_amount(amount_cents, product=product)
+    await _require_allowed_amount(db, amount_cents, product=product)
     if settings.payment_mode != "mock" and not settings.public_base_url.strip():
         raise AppError(
             code="public_base_url_missing",

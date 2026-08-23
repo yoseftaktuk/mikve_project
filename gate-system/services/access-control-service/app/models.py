@@ -36,3 +36,17 @@ class HardwareEvent(Base):
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
     payload_json: Mapped[str] = mapped_column(String(2000), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PricingConfig(Base):
+    """Single-row catalog for entrance fee and monthly subscription price."""
+
+    __tablename__ = "pricing_config"
+    __table_args__ = {"schema": settings.postgres_schema}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entrance_fee_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    subscription_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

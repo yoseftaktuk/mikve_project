@@ -56,8 +56,8 @@ class FingerprintsClient:
         uid: str,
         holder_name: str | None = None,
         national_id: str | None = None,
-    ) -> None:
-        """Create a ledger record for the given UID if it does not already exist."""
+    ) -> MemberValidation:
+        """Create a ledger record and return the member created by the service."""
         body: dict = {"uid": uid, "holder_name": holder_name}
         if national_id is not None:
             body["national_id"] = national_id
@@ -73,8 +73,18 @@ class FingerprintsClient:
                 detail = ""
             if detail == "national_id_taken":
                 raise ValueError("national_id_taken")
-            return
+            raise ValueError(detail or "member_registration_failed")
         resp.raise_for_status()
+        row = resp.json()
+        return MemberValidation(
+            member_id=str(row["id"]),
+            uid=str(row["uid"]),
+            is_enabled=bool(row["is_enabled"]),
+            assigned_user_id=str(row["assigned_user_id"]) if row.get("assigned_user_id") else None,
+            balance_cents=0,
+            holder_name=row.get("holder_name"),
+            national_id=row.get("national_id"),
+        )
 
     async def rename(
         self,

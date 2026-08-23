@@ -17,6 +17,7 @@
 }
 
 .doorCard,
+.pricingCard,
 .statsCard,
 .usersCard {
   flex: 0 0 auto;

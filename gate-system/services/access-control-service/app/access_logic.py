@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .clients import FingerprintsClient, HardwareClient
 from .models import AccessLog
+from .pricing import get_entrance_fee_cents
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,7 @@ async def _legacy_process_cash_inserted(
     publish,
 ) -> tuple[bool, int]:
     """Pre-saga cash path (kept behind ACCESS_SAGA_ENABLED=false)."""
-    fee = settings.entrance_fee_cents
+    fee = await get_entrance_fee_cents(db)
     door_seconds = settings.door_unlock_seconds
     ts = datetime.now(timezone.utc).isoformat()
 

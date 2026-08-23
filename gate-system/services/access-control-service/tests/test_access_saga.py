@@ -35,23 +35,26 @@ class FakeDb:
     def __init__(self) -> None:
         self.rows: list[object] = []
         self.commits = 0
-        self._by_id: dict[uuid.UUID, object] = {}
+        self._by_id: dict[object, object] = {}
 
     def add(self, row: object) -> None:
         self.rows.append(row)
         row_id = getattr(row, "id", None)
-        if isinstance(row_id, uuid.UUID):
+        if row_id is not None:
             self._by_id[row_id] = row
 
     async def flush(self) -> None:
         for row in self.rows:
             row_id = getattr(row, "id", None)
-            if isinstance(row_id, uuid.UUID):
+            if row_id is not None:
                 self._by_id[row_id] = row
 
     async def commit(self) -> None:
         self.commits += 1
         await self.flush()
+
+    async def get(self, model: type, key: object) -> object | None:
+        return self._by_id.get(key)
 
 
 class FakeFingerprintsClient:

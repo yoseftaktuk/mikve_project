@@ -201,22 +201,25 @@ RFID_SERIAL_PORT=/dev/ttyUSB0
 RFID_BAUDRATE=9600
 ```
 
-> **זמן פתיחת הדלת** ו**מחיר כניסה** מוגדרים במקום אחד בלבד —  
-> `services/access-control-service/.env`:
+> **זמן פתיחת הדלת** מוגדר ב-`services/access-control-service/.env`.  
+> **מחיר כניסה** ו**מחיר מנוי חודשי** נזרעים מ-`ENTRANCE_FEE_CENTS` / `SUBSCRIPTION_PRICE_CENTS` בפעם הראשונה, ואחר כך מתעדכנים ממסך הניהול:
 
 ```env
-ENTRANCE_FEE_CENTS=500    # באגורות: 500 = ₪5
+ENTRANCE_FEE_CENTS=500    # באגורות: 500 = ₪5 (seed בלבד אחרי יצירת pricing_config)
+SUBSCRIPTION_PRICE_CENTS=30000  # באגורות: ₪300 (seed; גם ב-payment-service/.env)
 DOOR_UNLOCK_SECONDS=5     # כמה שניות הדלת פתוחה
 CASH_SESSION_TIMEOUT_SECONDS=20  # איפוס תשלום מזומן חלקי אם לא נכנס מטבע נוסף
 MANAGEMENT_PIN=1234       # קוד סודי לדף ניהול (הטענת טביעת אצבע / פתיחת דלת / רישום אצבע)
 FINGERPRINT_APPROVAL_TIMEOUT_SECONDS=25  # כמה זמן חלון האישור אחרי סריקת אצבע
 ```
 
-אחרי שינוי מחיר, זמן דלת או קוד ניהול:
+אחרי שינוי זמן דלת או קוד ניהול:
 
 ```bash
 docker compose up -d access-control-service
 ```
+
+שינוי מחיר כניסה / מנוי חודשי בזמן ריצה: דף ניהול → עדכון מחירים (אין צורך בריסטארט).
 
 ### 4. הפעלת המערכת על ה-Pi
 

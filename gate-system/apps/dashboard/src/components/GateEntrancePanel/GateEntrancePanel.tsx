@@ -78,6 +78,9 @@ export function GateEntrancePanel({
               >
                 <div className={styles.cashProgressFill} style={{ width: `${cashProgress}%` }} />
               </div>
+              <p className={styles.cashNoChangeNotice} role="note">
+                אין החזר עודף. הכנס סכום מדויק.
+              </p>
               {paidCents > 0 && remainingCents > 0 && (
                 <p className={styles.cashHint}>
                   שולם: {formatCompactMoney(paidCents)} · נותר: {formatCompactMoney(remainingCents)}
