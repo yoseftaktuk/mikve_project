@@ -1,5 +1,5 @@
 [Unit]
-Description=Gate System Server (LAN backend: postgres, redis, APIs, dashboard, nginx)
+Description=Gate System Server (LAN backend: postgres, redis, APIs, frontend, nginx)
 Documentation=file:///opt/gate-system/README.md
 After=docker.service network-online.target
 Wants=network-online.target

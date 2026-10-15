@@ -1,7 +1,7 @@
 # Raspberry Pi override — REQUIRED on real hardware:
 #   docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --build
 #
-# Set HARDWARE_MODE=rpi in services/hardware-service/.env before starting.
+# Set HARDWARE_MODE=rpi in backend/hardware-service/.env before starting.
 
 services:
   hardware-service:

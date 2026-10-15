@@ -4,7 +4,7 @@
 # Before starting:
 #   1. Copy .env.example → .env and service .env files
 #   2. Set EDGE_HARDWARE_HOST=<PI_LAN_IP> in .env (Pi hardware-service port 8000)
-#   3. Set HARDWARE_SERVICE_URL=http://<PI_LAN_IP>:8000 in services/access-control-service/.env
+#   3. Set HARDWARE_SERVICE_URL=http://<PI_LAN_IP>:8000 in backend/access-control-service/.env
 
 name: gate-system-server
 
@@ -25,7 +25,7 @@ services:
       - fingerprints-service
       - payment-service
       - access-control-service
-      - dashboard
+      - frontend
     restart: unless-stopped
 
   postgres:
@@ -62,9 +62,9 @@ services:
   fingerprints-service:
     build:
       context: .
-      dockerfile: ./services/fingerprints-service/Dockerfile
+      dockerfile: ./backend/fingerprints-service/Dockerfile
     env_file:
-      - ./services/fingerprints-service/.env
+      - ./backend/fingerprints-service/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,9 +75,9 @@ services:
   payment-service:
     build:
       context: .
-      dockerfile: ./services/payment-service/Dockerfile
+      dockerfile: ./backend/payment-service/Dockerfile
     env_file:
-      - ./services/payment-service/.env
+      - ./backend/payment-service/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,9 +88,9 @@ services:
   access-control-service:
     build:
       context: .
-      dockerfile: ./services/access-control-service/Dockerfile
+      dockerfile: ./backend/access-control-service/Dockerfile
     env_file:
-      - ./services/access-control-service/.env
+      - ./backend/access-control-service/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,10 +98,10 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  dashboard:
-    build: ./apps/dashboard
+  frontend:
+    build: ./frontend
     env_file:
-      - ./apps/dashboard/.env
+      - ./frontend/.env
     restart: unless-stopped
 
   # Named Cloudflare Tunnel for Nedarim callbacks + public top-up hostname.

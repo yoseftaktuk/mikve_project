@@ -1,0 +1,5 @@
+{
+  "extraPaths": ["shared/py"],
+  "venvPath": ".",
+  "reportMissingImports": "warning"
+}

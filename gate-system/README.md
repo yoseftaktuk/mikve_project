@@ -28,11 +28,11 @@ Services:
 ```bash
 cd gate-system
 cp .env.example .env
-cp services/fingerprints-service/.env.example services/fingerprints-service/.env
-cp services/hardware-service/.env.example services/hardware-service/.env
-cp services/access-control-service/.env.example services/access-control-service/.env
-cp services/payment-service/.env.example services/payment-service/.env
-cp apps/dashboard/.env.example apps/dashboard/.env
+cp backend/fingerprints-service/.env.example backend/fingerprints-service/.env
+cp backend/hardware-service/.env.example backend/hardware-service/.env
+cp backend/access-control-service/.env.example backend/access-control-service/.env
+cp backend/payment-service/.env.example backend/payment-service/.env
+cp frontend/.env.example frontend/.env
 ```
 
 > `.env` files are ignored by git and never committed — they hold machine-local
@@ -125,7 +125,7 @@ Fingerprint-related events:
 - **UART של ה-Pi** (`/dev/serial0`): הרץ `sudo raspi-config` → *Interface Options* → *Serial Port* → כבה shell על הפורט, הפעל את החומרה, ואתחל.
 - **מתאם USB-TTL** (`/dev/ttyUSB1`): פשוט יותר, לא דורש raspi-config, ומשאיר את `/dev/ttyUSB0` לקורא ה-RFID.
 
-הגדרה ב-`services/hardware-service/.env` (ריק = מנוטרל):
+הגדרה ב-`backend/hardware-service/.env` (ריק = מנוטרל):
 
 ```env
 FINGERPRINT_SERIAL_PORT=/dev/serial0
@@ -177,16 +177,16 @@ cd gate-system
 
 ```bash
 cp .env.example .env
-cp services/fingerprints-service/.env.example services/fingerprints-service/.env
-cp services/hardware-service/.env.example services/hardware-service/.env
-cp services/access-control-service/.env.example services/access-control-service/.env
-cp services/payment-service/.env.example services/payment-service/.env
-cp apps/dashboard/.env.example apps/dashboard/.env
+cp backend/fingerprints-service/.env.example backend/fingerprints-service/.env
+cp backend/hardware-service/.env.example backend/hardware-service/.env
+cp backend/access-control-service/.env.example backend/access-control-service/.env
+cp backend/payment-service/.env.example backend/payment-service/.env
+cp frontend/.env.example frontend/.env
 ```
 
 ### 3. הגדרת חומרה (חובה)
 
-ערוך `services/hardware-service/.env`:
+ערוך `backend/hardware-service/.env`:
 
 ```env
 HARDWARE_MODE=rpi
@@ -201,7 +201,7 @@ RFID_SERIAL_PORT=/dev/ttyUSB0
 RFID_BAUDRATE=9600
 ```
 
-> **זמן פתיחת הדלת** מוגדר ב-`services/access-control-service/.env`.  
+> **זמן פתיחת הדלת** מוגדר ב-`backend/access-control-service/.env`.  
 > **מחיר כניסה** ו**מחיר מנוי חודשי** נזרעים מ-`ENTRANCE_FEE_CENTS` / `SUBSCRIPTION_PRICE_CENTS` בפעם הראשונה, ואחר כך מתעדכנים ממסך הניהול:
 
 ```env
@@ -369,7 +369,7 @@ sudo systemctl start gate-system
 להרצה מקומית עם סימולציה (בלי GPIO אמיתי):
 
 ```bash
-# services/hardware-service/.env
+# backend/hardware-service/.env
 HARDWARE_MODE=mock
 
 docker compose up --build
@@ -408,13 +408,13 @@ dashboard + thin Nginx           postgres, redis, fingerprints, access,
 cd gate-system
 cp .env.example .env
 # Set EDGE_HARDWARE_HOST=<PI_LAN_IP>  (e.g. 192.168.1.50)
-cp services/fingerprints-service/.env.example services/fingerprints-service/.env
-cp services/payment-service/.env.example services/payment-service/.env
-cp services/access-control-service/.env.example services/access-control-service/.env
-cp apps/dashboard/.env.example apps/dashboard/.env
+cp backend/fingerprints-service/.env.example backend/fingerprints-service/.env
+cp backend/payment-service/.env.example backend/payment-service/.env
+cp backend/access-control-service/.env.example backend/access-control-service/.env
+cp frontend/.env.example frontend/.env
 ```
 
-In `services/access-control-service/.env`:
+In `backend/access-control-service/.env`:
 
 ```env
 HARDWARE_SERVICE_URL=http://<PI_LAN_IP>:8000
@@ -435,11 +435,11 @@ Redis is published on LAN port `6379` (`REDIS_LAN_PORT`). Restrict it with a fir
 cd gate-system
 cp deploy/.env.edge.example .env.edge
 # Set SERVER_LAN_IP=<SERVER_LAN_IP>  (e.g. 192.168.1.10)
-cp services/hardware-service/.env.example services/hardware-service/.env
-cp apps/dashboard/.env.example apps/dashboard/.env
+cp backend/hardware-service/.env.example backend/hardware-service/.env
+cp frontend/.env.example frontend/.env
 ```
 
-In `services/hardware-service/.env`:
+In `backend/hardware-service/.env`:
 
 ```env
 HARDWARE_MODE=rpi
@@ -512,7 +512,7 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.pi.yml up -d --bui
 For local Docker without Nedarim credentials or Cloudflare Tunnel:
 
 ```env
-# services/payment-service/.env
+# backend/payment-service/.env
 PAYMENT_MODE=mock
 # PUBLIC_BASE_URL not required
 # NEDARIM_MOSAD / NEDARIM_API_VALID not required
@@ -541,9 +541,10 @@ Card top-up needs a **public HTTPS origin**:
 ### Named tunnel (production)
 
 1. In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel and a public hostname (e.g. `gate-pay.example.org`) pointing at `http://nginx:80`. Prefer exposing only that hostname; keep LAN `:80` for management.
+   - **`http://nginx:80` only works when `cloudflared` runs in this Compose project** (same Docker network). If the connector runs on the host / another machine, use `http://127.0.0.1:80` (or `http://<SERVER_LAN_IP>:80`) instead — otherwise you get `lookup nginx on …: no such host` and Cloudflare **502**.
 2. Put the tunnel token in root `.env` as `CLOUDFLARE_TUNNEL_TOKEN=…`.
-3. Set `PUBLIC_BASE_URL=https://gate-pay.example.org` in `services/payment-service/.env` (no trailing slash).
-4. Start with the profile:
+3. Set `PUBLIC_BASE_URL=https://gate-pay.example.org` in `backend/payment-service/.env` (no trailing slash).
+4. Start with the profile (this is what puts `cloudflared` on the Compose network so `nginx` resolves):
 
 ```bash
 docker compose --profile tunnel up -d --build
@@ -555,6 +556,8 @@ docker compose -f deploy/docker-compose.server.yml --project-directory . --env-f
 
 Path-filtered ingress example: `deploy/cloudflared/config.example.yml`.
 
+If Cloudflare shows **502 Bad gateway** / Host Error, check `cloudflared` logs for `lookup nginx` — that means the connector is not on the Compose network. Either start `--profile tunnel` with a valid token, or change the public hostname service URL to `http://127.0.0.1:80`.
+
 ### Quick tunnel (one-shot smoke)
 
 ```bash
@@ -562,7 +565,7 @@ docker compose --profile quick-tunnel up cloudflared-quick
 # Wait for a line like: https://xxxx.trycloudflare.com
 ```
 
-Copy that URL into `services/payment-service/.env` as `PUBLIC_BASE_URL`, restart `payment-service`, then create a ₪20 top-up from the kiosk (or `POST /api/payments/card-topups`). The URL changes every restart — use a named tunnel for real use.
+Copy that URL into `backend/payment-service/.env` as `PUBLIC_BASE_URL`, restart `payment-service`, then create a ₪20 top-up from the kiosk (or `POST /api/payments/card-topups`). The URL changes every restart — use a named tunnel for real use.
 
 ### Kiosk flow reminder
 
@@ -612,7 +615,7 @@ Fingerprints that should receive these donations must have `national_id` set to 
 ### Local curl (development only)
 
 ```env
-# services/payment-service/.env
+# backend/payment-service/.env
 ENVIRONMENT=dev
 NEDARIM_REQUIRE_CLOUDFLARE=false
 NEDARIM_WEBHOOK_ALLOW_LOCAL=true
@@ -674,9 +677,8 @@ Specify whether it should fire for regular transactions and/or credit-card recur
 
 ```
 gate-system/
-  apps/
-    dashboard/                 # React TS app
-  services/
+  frontend/                   # React TS app
+  backend/
     access-control-service/
     fingerprints-service/
     hardware-service/
@@ -688,7 +690,7 @@ gate-system/
     postgres/
     cloudflared/               # example tunnel ingress
     docker-compose.server.yml  # LAN backend (no hardware)
-    docker-compose.edge.yml    # Pi edge (hardware + dashboard)
+    docker-compose.edge.yml    # Pi edge (hardware + frontend)
     docker-compose.pi.yml      # GPIO override for single-host Pi
     systemd/                   # split-deploy boot units (edge + server)
   docker-compose.override.yml  # Local live reload (auto-merged on `docker compose up`)
@@ -700,15 +702,15 @@ gate-system/
 Unit tests per service (each service has its own `pytest.ini`):
 
 ```bash
-cd services/access-control-service && pytest   # fingerprint approval/scan/enrollment logic
-cd services/hardware-service && pytest         # sensor driver against a fake AS608
-cd services/payment-service && pytest          # Nedarim create/callback/webhook/idempotency
+cd backend/access-control-service && pytest   # fingerprint approval/scan/enrollment logic
+cd backend/hardware-service && pytest         # sensor driver against a fake AS608
+cd backend/payment-service && pytest          # Nedarim create/callback/webhook/idempotency
 ```
 
 Dashboard checks:
 
 ```bash
-cd apps/dashboard && npm run lint && npm run build
+cd frontend && npm run lint && npm run build
 ```
 
 ## Next steps (typical)

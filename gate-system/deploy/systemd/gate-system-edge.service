@@ -1,5 +1,5 @@
 [Unit]
-Description=Gate System Edge (Pi: hardware-service + dashboard + nginx)
+Description=Gate System Edge (Pi: hardware-service + frontend + nginx)
 Documentation=file:///opt/gate-system/README.md
 After=docker.service network-online.target
 Wants=network-online.target

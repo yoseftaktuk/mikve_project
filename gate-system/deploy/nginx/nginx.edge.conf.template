@@ -9,7 +9,7 @@ http {
   keepalive_timeout 65;
 
   # Resolve Docker service names at request time (avoids "host not found in upstream"
-  # when nginx starts before dashboard/hardware-service).
+  # when nginx starts before frontend/hardware-service).
   resolver 127.0.0.11 8.8.8.8 valid=10s ipv6=off;
 
   map $http_upgrade $connection_upgrade {
@@ -21,8 +21,8 @@ http {
     listen 80;
 
     location / {
-      set $dashboard_upstream "dashboard:80";
-      proxy_pass http://$dashboard_upstream;
+      set $frontend_upstream "frontend:80";
+      proxy_pass http://$frontend_upstream;
       proxy_set_header Host $host;
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

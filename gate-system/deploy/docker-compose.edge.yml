@@ -3,7 +3,7 @@
 #
 # Before starting:
 #   1. Copy deploy/.env.edge.example → .env.edge and set SERVER_LAN_IP
-#   2. Set HARDWARE_MODE=rpi and REDIS_URL=redis://<SERVER_LAN_IP>:6379/0 in services/hardware-service/.env
+#   2. Set HARDWARE_MODE=rpi and REDIS_URL=redis://<SERVER_LAN_IP>:6379/0 in backend/hardware-service/.env
 #   3. Start the LAN server stack first
 
 name: gate-system-edge
@@ -23,15 +23,15 @@ services:
       - envsubst '$$SERVER_LAN_IP' < /etc/nginx/nginx.template.conf > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
     depends_on:
       - hardware-service
-      - dashboard
+      - frontend
     restart: unless-stopped
 
   hardware-service:
     build:
       context: .
-      dockerfile: ./services/hardware-service/Dockerfile
+      dockerfile: ./backend/hardware-service/Dockerfile
     env_file:
-      - ./services/hardware-service/.env
+      - ./backend/hardware-service/.env
     # Reachable from the LAN server (access-control opens the door over HTTP).
     ports:
       - "${HARDWARE_HTTP_PORT:-8000}:8000"
@@ -41,8 +41,8 @@ services:
       - /proc/device-tree:/proc/device-tree:ro
     restart: unless-stopped
 
-  dashboard:
-    build: ./apps/dashboard
+  frontend:
+    build: ./frontend
     env_file:
-      - ./apps/dashboard/.env
+      - ./frontend/.env
     restart: unless-stopped

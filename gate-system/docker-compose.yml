@@ -12,7 +12,7 @@ services:
       - payment-service
       - hardware-service
       - access-control-service
-      - dashboard
+      - frontend
     restart: unless-stopped
 
   postgres:
@@ -49,9 +49,9 @@ services:
   fingerprints-service:
     build:
       context: .
-      dockerfile: ./services/fingerprints-service/Dockerfile
+      dockerfile: ./backend/fingerprints-service/Dockerfile
     env_file:
-      - ./services/fingerprints-service/.env
+      - ./backend/fingerprints-service/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,9 +62,9 @@ services:
   payment-service:
     build:
       context: .
-      dockerfile: ./services/payment-service/Dockerfile
+      dockerfile: ./backend/payment-service/Dockerfile
     env_file:
-      - ./services/payment-service/.env
+      - ./backend/payment-service/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,9 +75,9 @@ services:
   hardware-service:
     build:
       context: .
-      dockerfile: ./services/hardware-service/Dockerfile
+      dockerfile: ./backend/hardware-service/Dockerfile
     env_file:
-      - ./services/hardware-service/.env
+      - ./backend/hardware-service/.env
     depends_on:
       redis:
         condition: service_healthy
@@ -87,9 +87,9 @@ services:
   access-control-service:
     build:
       context: .
-      dockerfile: ./services/access-control-service/Dockerfile
+      dockerfile: ./backend/access-control-service/Dockerfile
     env_file:
-      - ./services/access-control-service/.env
+      - ./backend/access-control-service/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,10 +97,10 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  dashboard:
-    build: ./apps/dashboard
+  frontend:
+    build: ./frontend
     env_file:
-      - ./apps/dashboard/.env
+      - ./frontend/.env
     restart: unless-stopped
 
   # Named Cloudflare Tunnel (Zero Trust token). Enable with:
